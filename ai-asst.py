@@ -1,10 +1,15 @@
+import random
 from flask import Flask, request, jsonify
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields, is_dataclass
 from typing import List, Dict, Type
 import json
-from time import sleep
+from time import sleep, time
 from zhipuai import ZhipuAI
+from json_tool import try_parse_ast_to_json, try_parse_json_object
+import logging
 
+# 创建Flask应用
+app = Flask(__name__)
 client = ZhipuAI(api_key="d0ec437e4b38610fe6a811eff802da77.pcTnm7mFo2Ue30Lm") 
 
 # 定义转换函数
@@ -17,6 +22,20 @@ def dataclass_from_dict(klass: Type, data: Dict) -> any:
     else:
         return data  # 基本类型直接返回
 
+# def dataclass_to_dict(instance) -> Dict:
+#     if hasattr(instance, "to_dict"):
+#         return instance.to_dict()
+#     elif isinstance(instance, list):
+#         return [dataclass_to_dict(item) for item in instance]
+#     elif isinstance(instance, dict):
+#         return {k: dataclass_to_dict(v) for k, v in instance.items()}
+#     else:
+#         try:
+#             return asdict(instance)
+#         except TypeError:
+#             return instance
+
+
 def dataclass_to_dict(instance) -> Dict:
     if hasattr(instance, "to_dict"):
         return instance.to_dict()
@@ -24,11 +43,10 @@ def dataclass_to_dict(instance) -> Dict:
         return [dataclass_to_dict(item) for item in instance]
     elif isinstance(instance, dict):
         return {k: dataclass_to_dict(v) for k, v in instance.items()}
+    elif is_dataclass(instance):
+        return {f.name: dataclass_to_dict(getattr(instance, f.name)) for f in fields(instance)}
     else:
-        try:
-            return asdict(instance)
-        except TypeError:
-            return instance
+        return instance
 
 @dataclass
 class Dimension:
@@ -46,7 +64,7 @@ class StudentAnswer:
     # 学生姓名
     stu_name: str = ""
     # 学生学号
-    stu_id: str = ""
+    stu_id: int = ""
     # 学生答案
     stu_answer: str = ""
     # 老师评分，小数类型
@@ -75,6 +93,8 @@ class StudentAnswer:
     stu_answer_plagiarism_suspicious_reason: str = ""
     # 学生答案主旨词
     stu_characteristics: str = ""
+    # ai阅卷状态
+    ai_status: bool = False
 
 @dataclass
 class Question:
@@ -116,49 +136,55 @@ class Question:
 @dataclass
 class Test:
     # 考试名称
-    name: str
+    name: str = ""
     # 考题，字典类型为str:Question
     questions: Dict[int, Question] = field(default_factory=dict)
 
-__question_content=""
-__standard_answer=""
-system_prompt_give_dimension=""
-user_prompt_give_dimension=""
-__score_key_points=""
-__stu_answer=""
-__dimsnsions=""
-__core_field_recalls=""
+# __question_content=""
+# __standard_answer=""
+# system_prompt_give_dimension=""
+# user_prompt_give_dimension=""
+# __score_key_points=""
+# __stu_answer=""
+# __dimsnsions=""
+# __core_field_recalls=""
 
 # 定义Test类型的实例，其中questions为空字典
 test = Test(name="Midterm Exam", questions={})
 
 # 定义一个函数，参数为questions的key和json格式的字符串，将json字符串转换为Question类型，并添加到test的questions字典中
 def add_question(key: int, json_str: str):
-    question_json = json.loads(json_str)
-    test.questions[key] = dataclass_from_dict(Question, question_json)
+    json_str,json_dict=try_parse_json_object(json_str)
+    test.questions[key] = dataclass_from_dict(Question, json_dict)
 
 # 假设Test实例已经创建，并且add_question函数也已定义
 test = Test(name="Midterm Exam", questions={})
 
 def GLM4_FUNCTION(system_prompt: str, user_prompt: str):
-    chat_history = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-    response = client.chat.completions.create(
-        model="glm-4-flash",
-        messages=chat_history,
-        stream=True
-    )
-    # 获取模型的回答
-    model_response = ""
-    # 打印模型回答
-    for chunk in response:
-        if chunk.choices[0].delta.content is not None:
-            chunk_content = chunk.choices[0].delta.content
-            model_response += chunk_content
-    print(model_response)
-    return model_response
+    assert(system_prompt!="")
+    assert(user_prompt!="")
+    try:
+        chat_history = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        response = client.chat.completions.create(
+            model="glm-4-flash",
+            messages=chat_history,
+            stream=True
+        )
+        # 获取模型的回答
+        model_response = ""
+        # 打印模型回答
+        for chunk in response:
+            if chunk.choices[0].delta.content is not None:
+                chunk_content = chunk.choices[0].delta.content
+                model_response += chunk_content
+        # print(model_response)
+        return model_response
+    except Exception as e:
+        print(f"Error in GLM4_FUNCTION: {e}")
+        return ""
 
 app = Flask(__name__)
 # 自定义JSON序列化
@@ -204,19 +230,15 @@ def update_question_content_standard_answer_route():
 
 @app.route('/get_question', methods=['GET'])
 def get_question():
-    try:
-        id = request.args.get('id')
-        # id转为int
-        id = int(id)
-        # 使用dataclass_to_dict函数转换Question实例为字典
-        question_dict = dataclass_to_dict(test.questions[id])
-        # 转换为JSON字符串
-        question_json = json.dumps(question_dict, indent=4, ensure_ascii=False)
-        print(question_json)
-        return jsonify(question_dict), 200
-    except Exception as e:
-        # 如果指定的id不存在，返回404错误
-        return jsonify({"error": "Question not found"}), 404
+    id = request.args.get('id')
+    # id转为int
+    id = int(id)
+    # 使用dataclass_to_dict函数转换Question实例为字典
+    question_dict = dataclass_to_dict(test.questions[id])
+    # 转换为JSON字符串
+    question_json = json.dumps(question_dict, indent=4, ensure_ascii=False)
+    print(question_json)
+    return jsonify(question_dict), 200
 
 def gen_score_key_points(id: int ,question_content: str, standard_answer: str):
     system_prompt_give_dimension=f"""
@@ -238,71 +260,58 @@ def gen_score_key_points(id: int ,question_content: str, standard_answer: str):
 {standard_answer}    
 """
     json_str=GLM4_FUNCTION(system_prompt=system_prompt_give_dimension, user_prompt=user_prompt_give_dimension)
-    json_data=json.loads(json_str)
-    test.questions[id].score_key_points= json_data['score_key_points']
+    json_str,json_dict=try_parse_json_object(json_str)
+    # json_data=json.loads(json_str)
+    test.questions[id].score_key_points= json_dict['score_key_points']
 
 @app.route('/give_dimension', methods=['GET'])
 def give_dimension_route():
-    global __question_content,__standard_answer,system_prompt_give_dimension,user_prompt_give_dimension
-    __question_content="""
-请简述“功能主义”在现代建筑设计中的原则，并结合具体建筑实例说明其应用
-    """
-    __standard_answer="""
-功能主义的原则：
-功能主义是20世纪初期兴起的一种建筑设计理念，它强调建筑的功能和实用性，认为建筑的形式应当服务于其功能。
-其主要原则包括：
-1.形式追随功能：建筑的设计应以其使用功能为导向，建筑的形状和结构应当反映其用途。
-2.简洁性：功能主义提倡简洁的设计，避免不必要的装饰，强调材料和结构的本质。
-3.灵活性：建筑设计应考虑到不同使用需求的变化，具备一定的灵活性和适应性。
-4.人本设计：关注使用者的需求，强调空间的舒适性和人性化。
-实例分析：
-一个经典的功能主义建筑实例是巴西利亚的国会大厦，由著名建筑师奥斯卡·尼迈耶设计。
-- 形式与功能：主要体现在建筑的两座主要结构——上部的圆顶和下部的矩形体，分别代表着立法和行政的功能。
-- 简洁性：国会大厦的外立面采用了光滑的白色混凝土，去除了传统建筑中的繁复装饰，强调了建筑的形式与功能的和谐统一。
-- 灵活性：国会大厦的内部空间设计灵活，可以根据不同的会议和活动需求进行调整，满足多种功能的使用。
-- 人本设计：建筑的设计不仅关注了功能的实现，也兼顾了使用者的体验，创造了开放、明亮的公共空间，增强了人与建筑的互动。
-结论：
-功能主义在现代建筑设计中发挥了重要作用，通过强调建筑的功能性和实用性，推动了建筑设计的简洁化和人性化。
-"""
+
+    id = request.args.get('id')
+    # id转为int
+    id = int(id)
+    __standard_answer=test.questions[id].standard_answer
+    __question_content=test.questions[id].question_content
     system_prompt_give_dimension=f"""
-## 角色：你是一个专业的老师 ，现在需要你根据我提供的题目和参考答案，给出对应的(维度,一级指标,二级指标,核心字段召回)json格式的列表,列表长度不能大于6。
+##【任务要求】
+根据我提供的【题目】和【参考答案】，给出对应的(维度,一级指标,二级指标,核心字段召回)JSON列表，列表长度不能大于6。
+1. 维度（dimension_name）： 维度是指评价或测试的某个方面或领域。它是评价内容的分类方式，用于确定评价的方向和重点。例如，在一份学生的综合评价中，可能包含“知识掌握”、“技能应用”和“情感态度”等维度。
+2. 一级指标（first_level_index）： 一级指标是维度的进一步细分，它具体描述了评价或测试的某个方面需要考虑的主要因素。一级指标通常是评价体系中的主要评判点，例如在“知识掌握”维度下，一级指标可能是“基础知识掌握”、“专业知识掌握”等。
+3. 二级指标（second_level_index）： 二级指标是对一级指标的进一步细化，它描述了如何具体评价一级指标。二级指标通常是可量化的具体评价点，例如在“基础知识掌握”一级指标下，二级指标可能是“记忆准确度”、“理解深度”等。
+4. 核心字段召回（core_field_recall）： 核心字段召回指的是在评价过程中需要特别关注和记录的关键信息或数据点。这些字段是评价结果的关键组成部分，它们直接关联到评价对象在该指标上的表现。例如，如果评价学生的“记忆准确度”，核心字段召回可能是学生在记忆测试中的正确率。
 
 ##【字段定义】：
 试卷和题目请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
-## JSON字段：
+### JSON字段：
 {{
 "exam_dimension_list":[
     {{
-        "dimension_name": "维度名称",
-        "first_level_index": "一级指标",
-        "second_level_index": "二级指标",
-        "core_field_recall": "核心字段召回"
-    }}
+        "dimension_name": "【任务要求】1. 维度名称",
+        "first_level_index": "【任务要求】2. 一级指标",
+        "second_level_index": "【任务要求】3. 二级指标",
+        "core_field_recall": "【任务要求】4. 核心字段召回"
+    }},
     ...
-    ]
+]
 }}
 
 ## 注意事项：
 1. 基于给出的内容，专业和严谨的回答问题。不允许添加任何编造成分。
 """
-
     user_prompt_give_dimension=f"""
-## 题目：{__question_content}
-## 参考答案：{__standard_answer}
+【题目】：{__question_content}
+【参考答案】：{__standard_answer}
 """
 
-    id = request.args.get('id')
-    # id转为int
-    id = int(id)
-    # 使用dataclass_to_dict函数转换Question实例为字典
-    question_dict = dataclass_to_dict(test.questions[id])
-    __standard_answer=question_dict['standard_answer']
-    __question_content=question_dict['question_content']
     json_str=GLM4_FUNCTION(system_prompt_give_dimension, user_prompt_give_dimension)
+    print(system_prompt_give_dimension)
+    print(user_prompt_give_dimension)
     # 解析JSON字符串
-    json_data = json.loads(json_str)
+    json_str,json_dict=try_parse_json_object(json_str)
+
+    # json_data_dict = json.loads(json_str)
     # 转换JSON数据中的每个项为Dimension对象
-    new_exam_dimensions = [dataclass_to_dict(item) for item in json_data['exam_dimension_list']]
+    new_exam_dimensions = [dataclass_from_dict(Dimension,item) for item in json_dict['exam_dimension_list']]
     # 更新test_instance中question[1]的exam_dimension_list
     test.questions[id].exam_dimension_list = new_exam_dimensions
     question_dict = dataclass_to_dict(test.questions[id])
@@ -310,78 +319,13 @@ def give_dimension_route():
 
 @app.route('/get_ai_prompt', methods=['get'])
 def get_ai_prompt_route():
-    global __question_content,__standard_answer,__score_key_points,__stu_answer,__dimsnsions,__core_field_recalls,system_prompt_give_dimension,user_prompt_give_dimension
+    # global __question_content,__standard_answer,__score_key_points,__stu_answer,__dimsnsions,__core_field_recalls,system_prompt_give_dimension,user_prompt_give_dimension
     __question_content=""
     __standard_answer=""
     __score_key_points=""
     __dimsnsions=""
     __core_field_recalls=""
-    system_prompt_give_dimension=f"""
-## 角色：你是一个专业的课程老师 ，现在需要你批改一套的试卷，需要按照以下【任务要求】执行。
 
-## 【评分规则】：
-1. 总分为100分。
-2. 学生答案需要围绕【维度和指标】内容以及【参考答案】展开，必须包含的核心字段有：{__core_field_recalls}，越贴近得分越高。
-3. 参考答案中的关键名字不能写错，写错需要扣分。
-
-## 维度和指标：元素格式为(维度,一级指标,二级指标）
-{__dimsnsions}
-
-## 考题内容
-{__question_content}
-
-## 参考答案：
-{__standard_answer}
-
-## 得分要点列表
-{__score_key_points}
-
-## 【任务要求】：
-1. ai_score: AI评分。根据【评分规则】评分，最高得分不能超过100分，最低分不小于0分。评分的依据在【ai_score_reason】项中给出。
-2. ai_score_reason: AI评分依据。每道题目的评分原因的内容不能超过100字。
-3. stu_answer_ai_suspicious: AI答案相似度。表示学生答案疑似AI生成的概率，类型为百分数。疑似AI答案的原因在【stu_answer_ai_suspicious_reason】项中给出。
-4. stu_answer_ai_suspicious_reason: 学生答案疑似AI的原因。不超过200字。
-5. ai_score_tags: AI评分标签列表。分别是："完美试卷"、"高分试卷"、"疑似AI"。其中"高分试卷"的给出依据是得分【ai_score】在90分以上，"疑似AI"的给出依据是学生答案疑似AI生成可疑度【stu_answer_ai_suspicious】大于80%，"完美试卷"的给出依据是【ai_score】在90分以上且学生答案疑似AI生成可疑度【stu_answer_ai_suspicious】小于10%。
-6. ai_answer: AI答案。AI答案不超过300字，AI答案需要根据【考题内容】和【参考答案】给出。
-7. hit_view_list: 学生答案命中得分要点列表。学生答案的要点与符合【得分要点列表】的交集。元素的个数等于【hit_view_count】
-8. stu_answer_score_key_points_match_list: 学生答案命中得分要点的符合度列表。【hit_view_list】中每个要点的符合度，每个元素的类型为百分数，取值越大表示学生答案与得分要点的匹配程度越高。元素的个数等于【hit_view_count】
-9. hit_view_count: 学生答案命中得分要点的个数。【hit_view_list】中元素的个数。
-10. stu_answer_ai_suspicious: 学生答案疑似AI生成可疑度。表示学生答案疑似AI生成的概率，类型为百分数。疑似AI答案的原因在【stu_answer_ai_suspicious_reason】项中给出。
-11. stu_answer_ai_suspicious_reason: 学生答案疑似AI的原因。不超过200字。
-12. stu_characteristics: 学生答案主旨词。
-
-##【字段定义】：
-试卷和题目请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
-### JSON字段：
-{{
-    "ai_score": "【任务要求】1. ai_score" ,
-    "ai_score_reason": "【任务要求】2. ai_score_reason",
-    "stu_answer_ai_suspicious": "【任务要求】3. stu_answer_ai_suspicious",
-    "stu_answer_ai_suspicious_reason": "【任务要求】4. stu_answer_ai_suspicious_reason",
-    "ai_score_tags": [
-        "【任务要求】5. ai_score_tags，例如: 完美试卷",
-    ],
-    "ai_answer": "【任务要求】6. ai_answer",
-    "hit_view_list": [
-        "【任务要求】7. hit_view_list[0]",
-        "【任务要求】7. hit_view_list[1]",
-    ],
-    "stu_answer_score_key_points_match_list": [
-        "【任务要求】8. stu_answer_score_key_points_match_list[0]",
-        "【任务要求】8. stu_answer_score_key_points_match_list[1]",
-    ],
-    "hit_view_count": "【任务要求】9. hit_view_count",
-    "stu_answer_ai_suspicious": "【任务要求】10. stu_answer_ai_suspicious",
-    "stu_answer_ai_suspicious_reason":"【任务要求】11. stu_answer_ai_suspicious_reason",
-    "stu_characteristics":"【任务要求】12. stu_characteristics"
-}}
-
-## 注意事项：
-1. 基于给出的内容，专业和严谨的回答问题。不允许在答案中添加任何编造成分。
-"""
-
-    user_prompt_give_dimension=""""""
-    
     id = request.args.get('id')
     # id转为int
     id = int(id)
@@ -413,23 +357,187 @@ def get_ai_prompt_route():
     score_key_points_string = "{"+score_key_points_string+"}"
     __score_key_points=score_key_points_string
 
+    system_prompt_give_dimension=f"""
+## 角色：你是一个专业的课程老师 ，现在需要你批改一套的试卷，需要按照以下【任务要求】执行。
+
+## 【评分规则】：
+1. 总分为100分。
+2. 学生答案需要围绕【维度和指标】内容以及【参考答案】展开，必须包含的核心字段有：{__core_field_recalls}，越贴近得分越高。
+3. 参考答案中的关键名字不能写错，写错需要扣分。
+
+## 维度和指标：元素格式为(维度,一级指标,二级指标）
+{__dimsnsions}
+
+## 考题内容：
+{__question_content}
+
+## 参考答案：
+{__standard_answer}
+
+## 得分要点列表：
+{__score_key_points}
+
+## 【任务要求】：
+1. ai_score: AI评分。根据【评分规则】评分，最高得分不能超过100分，最低分为0分。评分的依据在【ai_score_reason】项中给出。
+2. ai_score_reason: AI评分依据。每道题目的评分原因的内容不能超过100字。
+3. ai_score_tags: AI评分标签列表。分别是："完美试卷"、"高分试卷"、"疑似AI"。其中"高分试卷"的给出依据是得分【ai_score】在90分以上，"疑似AI"的给出依据是学生答案疑似AI生成可疑度【stu_answer_ai_suspicious】大于80%，"完美试卷"的给出依据是【ai_score】在90分以上且学生答案疑似AI生成可疑度【stu_answer_ai_suspicious】小于10%。
+4. ai_answer: AI答案。AI答案不超过300字，AI答案需要根据【考题内容】和【参考答案】给出。
+5. hit_view_list: 学生答案命中得分要点列表。学生答案的要点与符合【得分要点列表】的交集。元素的个数等于【hit_view_count】
+6. stu_answer_score_key_points_match_list: 学生答案命中得分要点的符合度列表。【hit_view_list】中每个要点的符合度，每个元素的类型为百分数，取值越大表示学生答案与得分要点的匹配程度越高。元素的个数等于【hit_view_count】
+7. hit_view_count: 学生答案命中得分要点的个数。【hit_view_list】中元素的个数。
+8. stu_answer_ai_suspicious: 学生答案疑似AI生成可疑度。表示学生答案疑似AI生成的概率，类型为百分数。疑似AI答案的原因在【stu_answer_ai_suspicious_reason】项中给出。
+9. stu_answer_ai_suspicious_reason: 学生答案疑似AI的原因。不超过200字。
+10. stu_characteristics: 学生答案主旨词。
+
+##【字段定义】：
+试卷和题目请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
+### JSON字段：
+{{
+    "ai_score": "【任务要求】1. ai_score" ,
+    "ai_score_reason": "【任务要求】2. ai_score_reason",
+    "ai_score_tags": [
+        "【任务要求】3. ai_score_tags，例如: 完美试卷",
+    ],
+    "ai_answer": "【任务要求】4. ai_answer",
+    "hit_view_list": [
+        "【任务要求】5. hit_view_list[0]",
+        "【任务要求】5. hit_view_list[1]",
+    ],
+    "stu_answer_score_key_points_match_list": [
+        "【任务要求】6. stu_answer_score_key_points_match_list[0]",
+        "【任务要求】6. stu_answer_score_key_points_match_list[1]",
+    ],
+    "hit_view_count": "【任务要求】7. hit_view_count",
+    "stu_answer_ai_suspicious": "【任务要求】8. stu_answer_ai_suspicious",
+    "stu_answer_ai_suspicious_reason":"【任务要求】9. stu_answer_ai_suspicious_reason",
+    "stu_characteristics":"【任务要求】10. stu_characteristics"
+}}
+
+## 注意事项：
+1. 基于给出的内容，专业和严谨的回答问题。不允许在答案中添加任何编造成分。
+"""
+
+    user_prompt_give_dimension=""""""
+    
     test.questions[id].ai_prompt=system_prompt_give_dimension
     return jsonify({"prompt":system_prompt_give_dimension}), 200
 
-def create_student_answer(id: int, student_answer: str) -> StudentAnswer:
-    questions=test.questions[id];
+def create_student_answer(id: int, student_answer: str, stu_id: int, stu_name: str) -> StudentAnswer:
+    question:Question
+    question=test.questions[id]
     # 创建StudentAnswer类的对象
-    student_answer = StudentAnswer(stu_answer = student_answer)
-    questions.stu_answer_list.append(student_answer)
+    student_answer = StudentAnswer(stu_answer = student_answer, stu_id=stu_id, stu_name=stu_name)
+    question.stu_answer_list.append(student_answer)
     return student_answer
 
 @app.route('/update_question_student_answer', methods=['POST'])
 def update_question_student_answer_route():
     id = request.form['id']
-    student_answer = request.form['student_answer']
     id=int(id)
-    student_answer_instance=create_student_answer(id, student_answer)
+    student_answer = request.form['student_answer']
+    stu_id = request.form['stu_id']
+    stu_id=int(stu_id)
+    stu_name = request.form['stu_name']
+    student_answer_instance=create_student_answer(id, student_answer, stu_id, stu_name)
     return jsonify({"success": True, "message": "student_answer added successfully."}), 200
+
+def generate_random_number():
+    """
+    根据给定的最小时间戳生成一个不超过10位的随机数。
+    """
+    # 确保最小时间戳是整数
+    min_timestamp = int(time())
+
+    # 生成一个基于时间戳的随机种子
+    random.seed(min_timestamp)
+
+    # 生成一个不超过10位的随机数
+    return random.randint(1, 10**10 - 1)
+
+def generate_full_random_name():
+    """
+    根据当前时间戳生成随机的完整中文名字或英文名字。
+    """
+    current_timestamp = int(time())
+    random.seed(current_timestamp)
+
+    # 中文字符集
+    chinese_chars = "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳酆鲍史唐费廉岑薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董梁杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刘宋李张赵钱孙李周吴郑王"
+    chinese_last_names = list(chinese_chars)
+    chinese_first_names = "伟刚勇毅俊峰强军平保东文辉力明永健世广志义兴良海山仁波宁贵福生龙元全国胜学祥才发武新利清飞彬富顺信子杰涛昌成康星光天达安岩中茂进林有坚和彪博诚先敬震振壮会思群豪心邦承乐绍功松善厚庆磊民友裕河哲江超浩亮政谦亨奇固之轮翰朗伯宏言若鸣朋斌梁栋维启克伦翔旭鹏泽晨辰士以建家致树炎德行时泰盛雄琛钧冠策腾楠榕风航弘"
+    # 英文名字
+    english_first_names = ["James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles"]
+    english_last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"]
+
+    # 随机选择生成中文名或英文名
+    if random.choice([True, False]):
+        # 生成中文名字
+        chinese_last_name = random.choice(chinese_last_names)
+        chinese_first_name = ''.join(random.sample(chinese_first_names, 2))
+        return chinese_last_name + chinese_first_name
+    else:
+        # 生成英文名字
+        english_first_name = random.choice(english_first_names)
+        english_last_name = random.choice(english_last_names)
+        return english_first_name + " " + english_last_name
+
+@app.route('/set_ai_autogenerate_answer', methods=['POST'])
+def set_AI_autogenerate_answer_route() -> StudentAnswer:
+    id = request.form['id']
+    id=int(id)
+    ai_mock_stu_num=request.form['ai_mock_stu_num']
+    ai_mock_stu_num=int(ai_mock_stu_num)
+    questions=test.questions[id];
+    # 使用ai_mock_stu_num迭代
+    for i in range(ai_mock_stu_num):    
+        ai_mock_answer=GLM4_FUNCTION("帮我回答这个题目，答案字数不超过200字", questions.question_content)
+        # ai_mock_stu_id=GLM4_FUNCTION("当我说开始的时候，帮我生成一个随机数，长度不超过10位", "开始")
+        ai_mock_stu_id=generate_random_number()
+        # ai_mock_stu_name=GLM4_FUNCTION("当我说开始的时候，帮我生成一个中文名，名字不超过3个字，寓意要好", "开始")
+        ai_mock_stu_name=generate_full_random_name()
+        create_student_answer(id, ai_mock_answer, ai_mock_stu_id, ai_mock_stu_name)
+    return jsonify({"success": True, "message": "set_AI_autogenerate_route added successfully."}), 200
+
+@app.route('/start_ai_grading', methods=['POST'])
+def start_ai_grading_route() -> StudentAnswer:
+    id = request.form['id']
+    id=int(id)
+    question:Question
+    question=test.questions[id];
+    # 使用ai_mock_stu_num迭代
+    for stu_answer in question.stu_answer_list:
+        # print(f"AI Grading Response for Student ID {stu_answer.stu_id}")
+        # print("question.ai_prompt=", question.ai_prompt)
+        # print("stu_answer.stu_answer", stu_answer.stu_answer)
+        ai_grading_json_str=GLM4_FUNCTION(question.ai_prompt, stu_answer.stu_answer)
+        # print("ai_grading_json_str=", ai_grading_json_str)
+        json_str,ai_grading_json=try_parse_json_object(ai_grading_json_str)        
+        
+        ai_score=ai_grading_json['ai_score']
+        ai_score_reason=ai_grading_json['ai_score_reason']
+        ai_score_tags=ai_grading_json['ai_score_tags']
+        ai_answer=ai_grading_json['ai_answer']
+        hit_view_list=ai_grading_json['hit_view_list']
+        stu_answer_score_key_points_match_list=ai_grading_json['stu_answer_score_key_points_match_list']
+        hit_view_count=ai_grading_json['hit_view_count']
+        stu_answer_ai_suspicious=ai_grading_json['stu_answer_ai_suspicious']
+        stu_answer_ai_suspicious_reason=ai_grading_json['stu_answer_ai_suspicious_reason']
+        stu_characteristics=ai_grading_json['stu_characteristics']
+        
+        stu_answer.ai_score=ai_score
+        stu_answer.ai_score_reason=ai_score_reason
+        stu_answer.ai_score_tags=ai_score_tags
+        question.ai_answer=ai_answer
+        stu_answer.hit_view_list=hit_view_list
+        stu_answer.stu_answer_score_key_points_match_list=stu_answer_score_key_points_match_list
+        stu_answer.hit_view_count=hit_view_count
+        stu_answer.stu_answer_ai_suspicious=stu_answer_ai_suspicious
+        stu_answer.stu_answer_ai_suspicious_reason=stu_answer_ai_suspicious_reason
+        stu_answer.stu_characteristics=stu_characteristics
+        stu_answer.ai_status=True
+
+    return jsonify({"success": True, "message": "start_ai_grading successfully."}), 200
+
 
 if __name__ == '__main__':
     app.run(debug=True, host='10.2.8.9', port=8080)
