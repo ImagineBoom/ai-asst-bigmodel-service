@@ -33,71 +33,71 @@ def dataclass_to_dict(instance) -> Dict:
 @dataclass
 class Dimension:
     # 维度名称
-    dimension_name: str
+    dimension_name: str = ""
     # 一级指标
-    first_level_index: str
+    first_level_index: str = ""
     # 二级指标
-    second_level_index: str
+    second_level_index: str = ""
     # 核心字段召回
-    core_field_recall: str
+    core_field_recall: str = ""
 
 @dataclass
 class StudentAnswer:
     # 学生姓名
-    stu_name: str
+    stu_name: str = ""
     # 学生学号
-    stu_id: str
+    stu_id: str = ""
     # 学生答案
-    stu_answer: str
+    stu_answer: str = ""
     # 老师评分，小数类型
-    teacher_score: float
+    teacher_score: float = 0.0
     # 老师评分理由
-    teacher_score_reason: str
+    teacher_score_reason: str = ""
     # ai评分
-    ai_score: float
+    ai_score: float = 0.0
     # ai评分理由
-    ai_score_reason: str
+    ai_score_reason: str = ""
     # ai评分标签，str列表
-    ai_score_tags: List[str]
+    ai_score_tags: List[str] = field(default_factory=list)
     # 学生答案命中得分要点的个数
-    hit_view_count: int
+    hit_view_count: int = 0
     # 学生答案命中得分要点列表
-    hit_view_list: List[str]
+    hit_view_list: List[str] = field(default_factory=list)
     # 学生答案命中得分要点的符合度列表
-    stu_answer_score_key_points_match_list: List[float]
+    stu_answer_score_key_points_match_list: List[float] = field(default_factory=list)
     # 学生答案疑似AI生成可疑度
-    stu_answer_ai_suspicious: float
+    stu_answer_ai_suspicious: float = 0.0
     # 学生答案疑似AI生成可疑理由
-    stu_answer_ai_suspicious_reason: str
+    stu_answer_ai_suspicious_reason: str = ""
     # 学生答案疑似抄袭可疑度
-    stu_answer_plagiarism_suspicious: float
+    stu_answer_plagiarism_suspicious: float = 0.0
     # 学生答案疑似抄袭可疑理由
-    stu_answer_plagiarism_suspicious_reason: str
+    stu_answer_plagiarism_suspicious_reason: str = ""
     # 学生答案主旨词
-    stu_characteristics: str
+    stu_characteristics: str = ""
 
 @dataclass
 class Question:
     # 老师姓名
-    teacher_name: str = "张三"
+    teacher_name: str = ""
     # 考试编号
-    exam_id: str = "20231201"
+    exam_id: str = ""
     # 考试名称
-    exam_name: str = "2023年12月1日考试"
+    exam_name: str = ""
     # 考试时间
-    exam_time: str = "2023年12月1日 09:00-11:00"
+    exam_time: str = ""
     # 考试科目
-    exam_subject: str = "计算机科学"
+    exam_subject: str = ""
     # 考题内容
-    question_content: str = "请回答以下问题：什么是人工智能？"
+    question_content: str = ""
     # ai prompt
-    ai_prompt: str = "请根据以下问题，生成答案：什么是人工智能？"
+    ai_prompt: str = ""
     # 标准答案，用于和用户答案进行对比
-    standard_answer: str = "人工智能是一种模拟人类智能的技术，包括机器学习、自然语言处理、计算机视觉等。"
+    standard_answer: str = ""
     # ai答案
-    ai_answer: str = "人工智能是一种模拟人类智能的技术，包括机器学习、自然语言处理、计算机视觉等。"
+    ai_answer: str = ""
     # 题目难度分析
-    question_difficulty: str  = "中等"
+    question_difficulty: str  = ""
     # 得分要点列表
     score_key_points: List[str] = field(default_factory=list)
     # 考试维度列表, 类型为Dimension
@@ -269,7 +269,7 @@ def give_dimension_route():
 
 ##【字段定义】：
 试卷和题目请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
-### JSON字段：
+## JSON字段：
 {{
 "exam_dimension_list":[
     {{
@@ -389,7 +389,7 @@ def get_ai_prompt_route():
 
     # 如果key不存在test.questions的key中，则创建键值对
     if id not in test.questions.keys():
-        test.questions[id] = question_dict
+        test.questions[id] = dataclass_from_dict(Question, question_dict)
     # 获取维度元素列表
     exam_dimension_list = dataclass_from_dict(Question, question_dict).exam_dimension_list
     #打印维度字符串列表
@@ -403,7 +403,7 @@ def get_ai_prompt_route():
     # 将结果组合成一个字符串
     __core_field_recalls = ",".join(unique_core_fields)
     __core_field_recalls="{"+__core_field_recalls+"}"
-    
+
     __question_content=dataclass_from_dict(Question, question_dict).question_content
     __standard_answer=dataclass_from_dict(Question, question_dict).standard_answer
     
@@ -412,9 +412,24 @@ def get_ai_prompt_route():
     score_key_points_string = ", ".join(score_key_points)
     score_key_points_string = "{"+score_key_points_string+"}"
     __score_key_points=score_key_points_string
-    
+
     test.questions[id].ai_prompt=system_prompt_give_dimension
     return jsonify({"prompt":system_prompt_give_dimension}), 200
+
+def create_student_answer(id: int, student_answer: str) -> StudentAnswer:
+    questions=test.questions[id];
+    # 创建StudentAnswer类的对象
+    student_answer = StudentAnswer(stu_answer = student_answer)
+    questions.stu_answer_list.append(student_answer)
+    return student_answer
+
+@app.route('/update_question_student_answer', methods=['POST'])
+def update_question_student_answer_route():
+    id = request.form['id']
+    student_answer = request.form['student_answer']
+    id=int(id)
+    student_answer_instance=create_student_answer(id, student_answer)
+    return jsonify({"success": True, "message": "student_answer added successfully."}), 200
 
 if __name__ == '__main__':
     app.run(debug=True, host='10.2.8.9', port=8080)
