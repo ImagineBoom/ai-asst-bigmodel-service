@@ -1,4 +1,6 @@
+from datetime import datetime
 import random
+import re
 from flask import Flask, request, jsonify
 from dataclasses import dataclass, field, asdict, fields, is_dataclass
 from typing import List, Dict, Type
@@ -60,6 +62,17 @@ class Dimension:
     core_field_recall: str = ""
 
 @dataclass
+class ScoreKeyPoint:
+    # 学生姓名
+    stu_name: str = ""
+    # 学生学号
+    stu_id: int = ""
+    # 单个答题要点名称
+    single_answer_key_point_name: str = ""
+    # 单个答题要点得分
+    single_answer_key_point_score: float = 0.0
+
+@dataclass
 class StudentAnswer:
     # 学生姓名
     stu_name: str = ""
@@ -69,12 +82,16 @@ class StudentAnswer:
     stu_answer: str = ""
     # 老师评分，小数类型
     teacher_score: float = 0.0
+    # 根据老师评分的排名
+    teacher_score_rank: int = 0
     # 老师评分理由
     teacher_score_reason: str = ""
     # ai评分
     ai_score: float = 0.0
     # ai评分理由
     ai_score_reason: str = ""
+    # 学生评分等级,A,B,C,D,E
+    stu_score_level: str = ""
     # ai评分标签，str列表
     ai_score_tags: List[str] = field(default_factory=list)
     # 学生答案命中得分要点的个数
@@ -92,9 +109,12 @@ class StudentAnswer:
     # 学生答案疑似抄袭可疑理由
     stu_answer_plagiarism_suspicious_reason: str = ""
     # 学生答案主旨词
+    # stu_answer_main_idea: str = ""
     stu_characteristics: str = ""
     # ai阅卷状态
     ai_status: bool = False
+    # 答题时间,默认值为当前日期时间
+    answer_time: str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 @dataclass
 class Question:
@@ -120,13 +140,24 @@ class Question:
     question_difficulty: str  = ""
     # 得分要点列表
     score_key_points: List[str] = field(default_factory=list)
+    # 得分要点列表数字
+    score_key_points_num: List[str] = field(default_factory=list)
+    # 每个得分要点人数统计
+    score_key_hit_points_count: List[int] = field(default_factory=list)
+    score_key_miss_points_count: List[int] = field(default_factory=list)
+    # 每个得分要点的学生排名表格，是一个二维列表，列表元素是StudentAnswer
+    # 得分要点1，对应score_key_points_rank[0]
+    score_key_points_rank: List[List[ScoreKeyPoint]] = field(default_factory=list)
     # 考试维度列表, 类型为Dimension
     exam_dimension_list: List[Dimension] = field(default_factory=list)
     # 学生答案列表，类型为StudentAnswer
     stu_answer_list: List[StudentAnswer] = field(default_factory=list)
+    # 考题得分等级
+    score_level_labels : List[str] = field(default_factory=list)
     # 考题得分等级人数,A\B\C\D\E
     score_level_count: List[int] = field(default_factory=list)
     # ai标签人数,{"完美试卷": 1,"高分试卷": 1,"疑似AI":1,"雷同试卷":1,"疑似抄袭":1},
+    ai_tag_list: List[str] = field(default_factory=list)
     ai_tag_count: List[int] = field(default_factory=list)
     # 主旨词列表
     main_word_list: List[str] = field(default_factory=list)
@@ -180,7 +211,7 @@ def GLM4_FUNCTION(system_prompt: str, user_prompt: str):
             if chunk.choices[0].delta.content is not None:
                 chunk_content = chunk.choices[0].delta.content
                 model_response += chunk_content
-        # print(model_response)
+        print(model_response)
         return model_response
     except Exception as e:
         print(f"Error in GLM4_FUNCTION: {e}")
@@ -236,9 +267,18 @@ def get_question():
     # 使用dataclass_to_dict函数转换Question实例为字典
     question_dict = dataclass_to_dict(test.questions[id])
     # 转换为JSON字符串
-    question_json = json.dumps(question_dict, indent=4, ensure_ascii=False)
-    print(question_json)
+    # question_json = json.dumps(question_dict, indent=4, ensure_ascii=False)
+    # print(question_json)
     return jsonify(question_dict), 200
+
+@app.route('/get_all_questions', methods=['GET'])
+def get_all_questions_route():
+    # test.questions 转为字典列表
+    questions_list = [dataclass_to_dict(question) for question in test.questions.values()]
+    # questions_list转换为JSON字符串
+    # questions_json = json.dumps(questions_list, indent=4, ensure_ascii=False)
+    # print(questions_json)
+    return jsonify(questions_list), 200
 
 def gen_score_key_points(id: int ,question_content: str, standard_answer: str):
     system_prompt_give_dimension=f"""
@@ -275,10 +315,10 @@ def give_dimension_route():
     system_prompt_give_dimension=f"""
 ##【任务要求】
 根据我提供的【题目】和【参考答案】，给出对应的(维度,一级指标,二级指标,核心字段召回)JSON列表，列表长度不能大于6。
-1. 维度（dimension_name）： 维度是指评价或测试的某个方面或领域。它是评价内容的分类方式，用于确定评价的方向和重点。例如，在一份学生的综合评价中，可能包含“知识掌握”、“技能应用”和“情感态度”等维度。
-2. 一级指标（first_level_index）： 一级指标是维度的进一步细分，它具体描述了评价或测试的某个方面需要考虑的主要因素。一级指标通常是评价体系中的主要评判点，例如在“知识掌握”维度下，一级指标可能是“基础知识掌握”、“专业知识掌握”等。
-3. 二级指标（second_level_index）： 二级指标是对一级指标的进一步细化，它描述了如何具体评价一级指标。二级指标通常是可量化的具体评价点，例如在“基础知识掌握”一级指标下，二级指标可能是“记忆准确度”、“理解深度”等。
-4. 核心字段召回（core_field_recall）： 核心字段召回指的是在评价过程中需要特别关注和记录的关键信息或数据点。这些字段是评价结果的关键组成部分，它们直接关联到评价对象在该指标上的表现。例如，如果评价学生的“记忆准确度”，核心字段召回可能是学生在记忆测试中的正确率。
+1. 维度名称【dimension_name】： 维度是指评价或测试的某个方面或领域。它是评价内容的分类方式，用于确定评价的方向和重点。例如，在一份学生的综合评价中，可能包含“知识掌握”、“技能应用”和“情感态度”等维度。
+2. 一级指标【first_level_index】： 一级指标是维度的进一步细分，它描述了需要考虑的主要因素，不能给出具体实例。一级指标通常是评价体系中的主要评判点，例如在“知识掌握”维度下，一级指标可能是“基础知识掌握”、“专业知识掌握”等。
+3. 二级指标【second_level_index】： 二级指标是对一级指标的进一步细化，它描述了如何具体评价一级指标。二级指标通常是可量化的具体评价点，例如在“基础知识掌握”一级指标下，二级指标可能是“记忆准确度”、“理解深度”等。
+4. 核心字段召回【core_field_recall】： 不超过6个字。核心字段召回指的是在评价过程中需要特别关注和记录的关键信息或数据点。这些字段是评价结果的关键组成部分，它们直接关联到评价对象在该指标上的表现。例如，如果评价学生的“记忆准确度”，核心字段召回可能是学生在记忆测试中的正确率。
 
 ##【字段定义】：
 试卷和题目请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
@@ -304,8 +344,8 @@ def give_dimension_route():
 """
 
     json_str=GLM4_FUNCTION(system_prompt_give_dimension, user_prompt_give_dimension)
-    print(system_prompt_give_dimension)
-    print(user_prompt_give_dimension)
+    # print(system_prompt_give_dimension)
+    # print(user_prompt_give_dimension)
     # 解析JSON字符串
     json_str,json_dict=try_parse_json_object(json_str)
 
@@ -317,7 +357,7 @@ def give_dimension_route():
     question_dict = dataclass_to_dict(test.questions[id])
     return jsonify(question_dict), 200
 
-@app.route('/get_ai_prompt', methods=['get'])
+@app.route('/get_ai_prompt', methods=['GET'])
 def get_ai_prompt_route():
     # global __question_content,__standard_answer,__score_key_points,__stu_answer,__dimsnsions,__core_field_recalls,system_prompt_give_dimension,user_prompt_give_dimension
     __question_content=""
@@ -358,11 +398,11 @@ def get_ai_prompt_route():
     __score_key_points=score_key_points_string
 
     system_prompt_give_dimension=f"""
-## 角色：你是一个专业的课程老师 ，现在需要你批改一套的试卷，需要按照以下【任务要求】执行。
+## 角色：你是一个专业的课程老师 ，现在需要你批改试题，我将发给你学生答案，需要你按照以下【任务要求】执行。
 
 ## 【评分规则】：
 1. 总分为100分。
-2. 学生答案需要围绕【维度和指标】内容以及【参考答案】展开，必须包含的核心字段有：{__core_field_recalls}，越贴近得分越高。
+2. 【学生答案】需要围绕【维度和指标】内容以及【参考答案】展开，必须包含的核心字段有：{__core_field_recalls}，越贴近得分越高。
 3. 参考答案中的关键名字不能写错，写错需要扣分。
 
 ## 维度和指标：元素格式为(维度,一级指标,二级指标）
@@ -378,22 +418,27 @@ def get_ai_prompt_route():
 {__score_key_points}
 
 ## 【任务要求】：
-1. ai_score: AI评分。根据【评分规则】评分，最高得分不能超过100分，最低分为0分。评分的依据在【ai_score_reason】项中给出。
-2. ai_score_reason: AI评分依据。每道题目的评分原因的内容不能超过100字。
-3. ai_score_tags: AI评分标签列表。分别是："完美试卷"、"高分试卷"、"疑似AI"。其中"高分试卷"的给出依据是得分【ai_score】在90分以上，"疑似AI"的给出依据是学生答案疑似AI生成可疑度【stu_answer_ai_suspicious】大于80%，"完美试卷"的给出依据是【ai_score】在90分以上且学生答案疑似AI生成可疑度【stu_answer_ai_suspicious】小于10%。
-4. ai_answer: AI答案。AI答案不超过300字，AI答案需要根据【考题内容】和【参考答案】给出。
+1. ai_score: AI 评分。根据【评分规则】评分，最高得分不能超过100分，最低分为0分。评分的依据在【ai_score_reason】项中给出。
+2. ai_score_reason: AI 评分依据。每道题目的评分原因的内容不能超过100字。
+3. ai_score_tags: AI 评分标签列表。分别是："完美试卷"、"高分试卷"、"疑似AI"。其中"高分试卷"的给出依据是得分【ai_score】在90分以上，"疑似AI"的给出依据是学生答案疑似AI生成可疑度【stu_answer_ai_suspicious】大于80%，"完美试卷"的给出依据是【ai_score】在90分以上且学生答案疑似AI生成可疑度【stu_answer_ai_suspicious】小于10%。
+4. ai_answer: AI 答案。AI 答案不超过300字，AI 答案需要根据【考题内容】和【参考答案】给出。
 5. hit_view_list: 学生答案命中得分要点列表。学生答案的要点与符合【得分要点列表】的交集。元素的个数等于【hit_view_count】
 6. stu_answer_score_key_points_match_list: 学生答案命中得分要点的符合度列表。【hit_view_list】中每个要点的符合度，每个元素的类型为百分数，取值越大表示学生答案与得分要点的匹配程度越高。元素的个数等于【hit_view_count】
 7. hit_view_count: 学生答案命中得分要点的个数。【hit_view_list】中元素的个数。
 8. stu_answer_ai_suspicious: 学生答案疑似AI生成可疑度。表示学生答案疑似AI生成的概率，类型为百分数。疑似AI答案的原因在【stu_answer_ai_suspicious_reason】项中给出。
-9. stu_answer_ai_suspicious_reason: 学生答案疑似AI的原因。不超过200字。
-10. stu_characteristics: 学生答案主旨词。
+9. stu_answer_ai_suspicious_reason: 学生答案疑似AI的原因。不超过200字。可以通过以下几个方面进行分析：
+    - 语言风格分析：AI 生成的内容可能在语言风格上过于统一，缺乏个性和情感色彩。可以通过对比内容中的语言风格，判断是否与人类的自然表达方式一致。
+    - 逻辑一致性：AI 在生成内容时，可能会在某些地方出现逻辑跳跃或不够连贯的表达。可以通过逻辑分析，检查文本中的论述是否连贯一致。
+    - 信息深度：AI 生成的内容可能在深度上不如人类专家或学者创作的内容。可以对比专业领域的深度信息和细节，判断内容是否具有足够深度和专业性。
+    - 文本多样性：AI 生成的内容可能在用词和句式上重复性较高，缺乏多样性。可以通过分析文本的用词和句式结构，检查是否有重复模式。
+    - 一致性检查：可以通过检查文档的元数据，如创建时间和作者信息等，判断内容是否与人类创作的文档一致。
+10. stu_characteristics: 学生答案主旨词。提取学生答案中的主旨词，不超过5个，用顿号【、】区隔。
 
 ##【字段定义】：
 试卷和题目请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
 ### JSON字段：
 {{
-    "ai_score": "【任务要求】1. ai_score" ,
+    "ai_score": 90,
     "ai_score_reason": "【任务要求】2. ai_score_reason",
     "ai_score_tags": [
         "【任务要求】3. ai_score_tags，例如: 完美试卷",
@@ -404,11 +449,11 @@ def get_ai_prompt_route():
         "【任务要求】5. hit_view_list[1]",
     ],
     "stu_answer_score_key_points_match_list": [
-        "【任务要求】6. stu_answer_score_key_points_match_list[0]",
-        "【任务要求】6. stu_answer_score_key_points_match_list[1]",
+        "30%",
+        "50%",
     ],
-    "hit_view_count": "【任务要求】7. hit_view_count",
-    "stu_answer_ai_suspicious": "【任务要求】8. stu_answer_ai_suspicious",
+    "hit_view_count": 5,
+    "stu_answer_ai_suspicious": "10%",
     "stu_answer_ai_suspicious_reason":"【任务要求】9. stu_answer_ai_suspicious_reason",
     "stu_characteristics":"【任务要求】10. stu_characteristics"
 }}
@@ -488,9 +533,18 @@ def set_AI_autogenerate_answer_route() -> StudentAnswer:
     ai_mock_stu_num=request.form['ai_mock_stu_num']
     ai_mock_stu_num=int(ai_mock_stu_num)
     questions=test.questions[id];
+    system_prompt_give_dimension=f"""
+## 角色：你是一个AI，现在需要你回答题目，答案需要按照以下【任务要求】执行。
+
+## 【任务要求】：
+1. 答案格式像是AI回复的。
+2. 答案不带个性化。
+3. 答案用词和句式上重复性较高，缺乏多样性。
+4. 答案输出不超过100字。
+"""
     # 使用ai_mock_stu_num迭代
     for i in range(ai_mock_stu_num):    
-        ai_mock_answer=GLM4_FUNCTION("帮我回答这个题目，答案字数不超过200字", questions.question_content)
+        ai_mock_answer=GLM4_FUNCTION(system_prompt_give_dimension, questions.question_content)
         # ai_mock_stu_id=GLM4_FUNCTION("当我说开始的时候，帮我生成一个随机数，长度不超过10位", "开始")
         ai_mock_stu_id=generate_random_number()
         # ai_mock_stu_name=GLM4_FUNCTION("当我说开始的时候，帮我生成一个中文名，名字不超过3个字，寓意要好", "开始")
@@ -503,7 +557,7 @@ def start_ai_grading_route() -> StudentAnswer:
     id = request.form['id']
     id=int(id)
     question:Question
-    question=test.questions[id];
+    question=test.questions[id]
     # 使用ai_mock_stu_num迭代
     for stu_answer in question.stu_answer_list:
         # print(f"AI Grading Response for Student ID {stu_answer.stu_id}")
@@ -512,7 +566,8 @@ def start_ai_grading_route() -> StudentAnswer:
         ai_grading_json_str=GLM4_FUNCTION(question.ai_prompt, stu_answer.stu_answer)
         # print("ai_grading_json_str=", ai_grading_json_str)
         json_str,ai_grading_json=try_parse_json_object(ai_grading_json_str)        
-        
+        print("ai_grading_json=", ai_grading_json)
+
         ai_score=ai_grading_json['ai_score']
         ai_score_reason=ai_grading_json['ai_score_reason']
         ai_score_tags=ai_grading_json['ai_score_tags']
@@ -524,20 +579,254 @@ def start_ai_grading_route() -> StudentAnswer:
         stu_answer_ai_suspicious_reason=ai_grading_json['stu_answer_ai_suspicious_reason']
         stu_characteristics=ai_grading_json['stu_characteristics']
         
-        stu_answer.ai_score=ai_score
+        stu_answer.ai_score=float(ai_score)
         stu_answer.ai_score_reason=ai_score_reason
         stu_answer.ai_score_tags=ai_score_tags
         question.ai_answer=ai_answer
-        stu_answer.hit_view_list=hit_view_list
-        stu_answer.stu_answer_score_key_points_match_list=stu_answer_score_key_points_match_list
         stu_answer.hit_view_count=hit_view_count
-        stu_answer.stu_answer_ai_suspicious=stu_answer_ai_suspicious
+        stu_answer.hit_view_list=hit_view_list
+        stu_answer.stu_answer_score_key_points_match_list=[extract_first_real_number(x) for x in stu_answer_score_key_points_match_list]
+        stu_answer.stu_answer_ai_suspicious=extract_first_real_number(stu_answer_ai_suspicious)
         stu_answer.stu_answer_ai_suspicious_reason=stu_answer_ai_suspicious_reason
         stu_answer.stu_characteristics=stu_characteristics
         stu_answer.ai_status=True
-
+        
+        # 根据 ai_score 更新 stu_score_level ，其中 大于等于90分为A，80-89分为B，70-79分为C，60-69分为D，60分以下为E
+        if stu_answer.ai_score >= 90:
+            stu_answer.stu_score_level = 'A'
+        elif stu_answer.ai_score >= 80:
+            stu_answer.stu_score_level = 'B'
+        elif stu_answer.ai_score >= 70:
+            stu_answer.stu_score_level = 'C'
+        elif stu_answer.ai_score >= 60:
+            stu_answer.stu_score_level = 'D'
+        else:
+            stu_answer.stu_score_level = 'E'
     return jsonify({"success": True, "message": "start_ai_grading successfully."}), 200
 
+@app.route('/get_one_stu_answer_detail', methods=['GET'])
+def get_one_stu_answer_detail_route():
+    id = request.args.get('id')
+    id = int(id)
+    stu_id = request.args.get('stu_id')
+    stu_id = int(stu_id)
+    stu_answer_dict= {}
+    # 使用dataclass_to_dict函数转换Question实例为字典
+    question=test.questions[id]
+    for stu_answer in question.stu_answer_list:
+        if stu_answer.stu_id==stu_id:
+                stu_answer_dict= dataclass_to_dict(stu_answer)
+    return jsonify(stu_answer_dict), 200
+
+
+@app.route('/make_sure_ai_grade', methods=['POST'])
+def make_sure_ai_grade_route() -> StudentAnswer:
+    id = request.form['id']
+    id=int(id)
+    stu_id = request.form['stu_id']
+    stu_id=int(stu_id)
+    teacher_score=request.form['teacher_score']
+    teacher_score=float(teacher_score)
+    teacher_score_reason=request.form['teacher_score_reason']
+    stu_score_level=request.form['stu_score_level']
+    
+    question:Question
+    question=test.questions[id];
+    
+    # 使用ai_mock_stu_num迭代
+    for stu_answer in question.stu_answer_list:
+        if stu_answer.stu_id==stu_id:
+            stu_answer.teacher_score=teacher_score
+            stu_answer.teacher_score_reason=teacher_score_reason
+            stu_answer.stu_score_level=stu_score_level
+
+    return jsonify({"success": True, "message": "make_sure_ai_grade_route successfully."}), 200
+
+@app.route('/auto_make_sure_all_ai_grade', methods=['POST'])
+def auto_make_sure_all_ai_grade_route() -> StudentAnswer:
+    id = request.form['id']
+    id=int(id)
+
+    question:Question
+    question=test.questions[id];
+
+    # 使用ai_mock_stu_num迭代
+    for stu_answer in question.stu_answer_list:
+        if(stu_answer.teacher_score==0):
+            stu_answer.teacher_score=stu_answer.ai_score
+
+    return jsonify({"success": True, "message": "auto_make_sure_all_ai_grade successfully."}), 200
+
+
+def determine_difficulty(a_count:float, b_count:float, c_count:float, d_count:float, e_count:float):
+    total_students = a_count + b_count + c_count + d_count + e_count
+
+    if total_students == 0:
+        return ''
+
+    high_grades_ratio = (a_count) / total_students
+    low_grades_ratio = (d_count + e_count) / total_students
+
+    if high_grades_ratio > 0.7:
+        return '容易'
+    elif low_grades_ratio > 0.7:
+        return '难'
+    else:
+        return '适中'
+
+def extract_first_real_number(s):
+    # 定义一个正则表达式来匹配实数
+    # 实数的匹配模式包括可选的正负号、整数部分、可选的小数部分以及可选的科学记数法表示
+    pattern = r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?'
+    
+    # 使用re.search查找第一个匹配的实数
+    match = re.search(pattern, s)
+    # 如果找到了匹配的实数，将其转换为float类型并返回
+    if match:
+        num = float(match.group())
+        if 0 <= num <= 1:
+            return num * 100
+        elif num > 100:
+            return 100
+        elif num < 0:
+            return 0
+        else:
+            return num
+    else:
+        # 如果没有找到匹配的实数，可以返回None或者抛出一个异常
+        return 0
+
+@app.route('/create_chart', methods=['POST'])
+def create_chart_route() -> StudentAnswer:
+    id = request.form['id']
+    id=int(id)
+    question:Question
+    question=test.questions[id];
+    # question.score_level_count
+    question.score_level_labels=["A","B","C","D","E"]
+    question.score_level_count=[0,0,0,0,0]
+
+    # 根据得分要点数先初始化答题要点矩阵图
+    
+    # 获取question.score_key_points的元素个数
+    number_of_key_points = len(question.score_key_points)
+    question.score_key_points_rank = [[] for _ in range(number_of_key_points)]
+    
+    question.ai_tag_list = ["完美试卷","高分试卷","疑似AI"]
+    question.ai_tag_count = [0, 0, 0]
+    
+    question.score_key_hit_points_count=[ 0 for _ in range(number_of_key_points)]
+    question.score_key_miss_points_count=[ 0 for _ in range(number_of_key_points)]
+    # 生成列表，元素分别丛1到len(number_of_key_points)
+    question.score_key_points_num = list(range(1, number_of_key_points + 1))
+    # 主旨词拼接
+    main_words=""
+    for stu_answer in question.stu_answer_list:
+        if stu_answer.ai_status:
+            # chart 1 根据stu_answer.stu_score_level更新question.score_level_count
+            if(stu_answer.stu_score_level=="A"):
+                question.score_level_count[0]+=1
+            elif(stu_answer.stu_score_level=="B"):
+                question.score_level_count[1]+=1
+            elif(stu_answer.stu_score_level=="C"):
+                question.score_level_count[2]+=1
+            elif(stu_answer.stu_score_level=="D"):
+                question.score_level_count[3]+=1
+            elif(stu_answer.stu_score_level=="E"):
+                question.score_level_count[4]+=1
+            
+
+            # chart3 ai标签人数,{"完美试卷": 1,"高分试卷": 1,"疑似AI":1,"雷同试卷":1,"疑似抄袭":1},
+            # "完美试卷"、"高分试卷"、"疑似AI" AI标签的数量统计
+            for ai_tag in stu_answer.ai_score_tags:
+                if "完美" in ai_tag:
+                    question.ai_tag_count[0] += 1
+                if "高分" in ai_tag:
+                    question.ai_tag_count[1] += 1
+                if "AI" in ai_tag:
+                    question.ai_tag_count[2] += 1
+                    
+            # chart4 每个得分要点的得分人数统计
+
+            ishit:bool
+            value:float
+            # 答题要点矩阵图s
+            for indexQue, standKeyPoint in enumerate(question.score_key_points):
+                ishit=0
+                for indexStu,stuKeyPoint in enumerate(stu_answer.hit_view_list):
+                    if(stuKeyPoint == standKeyPoint):
+                        value=0.0
+                        if(indexStu<len(stu_answer.stu_answer_score_key_points_match_list)):
+                            value=(stu_answer.stu_answer_score_key_points_match_list[indexStu])
+                        question.score_key_points_rank[indexQue].append(ScoreKeyPoint(stu_answer.stu_name, stu_answer.stu_id, standKeyPoint, value))
+                        ishit=1
+                        question.score_key_hit_points_count[indexQue]=question.score_key_hit_points_count[indexQue]+1
+                        break;
+                if not ishit:
+                    question.score_key_points_rank[indexQue].append(ScoreKeyPoint(stu_answer.stu_name, stu_answer.stu_id, standKeyPoint, 0.0))
+                    question.score_key_miss_points_count[indexQue]=question.score_key_miss_points_count[indexQue]+1
+        #把stu_answer.stu_characteristics使用分隔符拼接起来，并拼接给main_words字符串
+        main_words = main_words + " "+stu_answer.stu_characteristics + " "
+
+
+
+    # chart2 分别给出题目偏难和偏容易的情况
+    # 如果A、B、C、D、E的数量都相差不超过5则认为题目难度适中，否则认为题目较偏难或较易
+    question.question_difficulty=determine_difficulty(question.score_level_count[0],question.score_level_count[1],question.score_level_count[2],question.score_level_count[3],question.score_level_count[4])
+    
+
+    # chart5 score rank
+    # 根据question.stu_answer_list中的teacher_score大小，给每个stu_answer的teacher_score_rank排序值
+    question.stu_answer_list.sort(key=lambda x: x.teacher_score, reverse=True)
+    # 根据question.stu_answer_list中的teacher_score_rank排序值，给每个stu_answer的teacher_score_rank赋值
+    for indexStu, stu_answer in enumerate(question.stu_answer_list):
+        question.stu_answer_list[indexStu].teacher_score_rank = indexStu + 1
+    
+    # chart 6 主旨词分布
+    system_prompt_give_dimension=f"""
+##【任务要求】：
+根据我提供的【主旨词列表】给出每个主旨词出现次数。【主旨词列表】中每个主旨词用分隔符或特殊字符分隔。
+1. main_idea_list ：主旨词列表，每个主旨词出现的次数在对应index的main_idea_list_count列表中
+2. main_idea_list_count ：主旨词出现次数列表
+
+##【字段定义】：
+试卷和题目请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
+### JSON字段：
+{{
+"main_idea_list":[
+    "idea1",
+    "idea2",
+    ...
+],
+"main_idea_list_count":[
+    1,
+    2,
+    ...
+]
+}}
+
+## 注意事项：
+1. 基于给出的内容，专业和严谨的回答问题。不允许添加任何编造成分。
+"""
+    user_prompt_give_dimension=f"""
+【主旨词列表】：
+{main_words}
+"""
+    json_str=GLM4_FUNCTION(system_prompt_give_dimension, user_prompt_give_dimension)
+    # 解析JSON字符串
+    json_str,json_dict=try_parse_json_object(json_str)
+    # 主旨词列表
+    # 根据main_word_list和main_word_distribution_count两个列表长度最小的那个，剪裁这两个列表，使它们俩长度相等
+    if len(json_dict["main_idea_list"]) > len(json_dict["main_idea_list_count"]):
+        json_dict["main_idea_list"] = json_dict["main_idea_list"][:len(json_dict["main_idea_list_count"])]
+    else:
+        json_dict["main_idea_list_count"] = json_dict["main_idea_list_count"][:len(json_dict["main_idea_list"])]
+
+    question.main_word_list=json_dict["main_idea_list"]
+    # 主旨词分布统计
+    question.main_word_distribution_count=json_dict["main_idea_list_count"]
+
+    return jsonify({"success": True, "message": "start_ai_grading successfully."}), 200
 
 if __name__ == '__main__':
     app.run(debug=True, host='10.2.8.9', port=8080)
