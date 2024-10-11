@@ -214,7 +214,7 @@ def GLM4_FUNCTION(system_prompt: str, user_prompt: str):
             if chunk.choices[0].delta.content is not None:
                 chunk_content = chunk.choices[0].delta.content
                 model_response += chunk_content
-        print(model_response)
+        # print(model_response)
         return model_response
     except Exception as e:
         print(f"Error in GLM4_FUNCTION: {e}")
@@ -256,7 +256,7 @@ def update_question_content_standard_answer_route():
     # 如果key不存在test.questions的key中，则创建键值对
     if id not in test.questions.keys():
         test.questions[id] = question
-        print("create:",test.questions[id])
+        # print("create:",test.questions[id])
     test.questions[id].question_content = question_content
     test.questions[id].standard_answer = standard_answer
     return jsonify({"success": True, "message": "Question added successfully."}), 200
@@ -560,6 +560,7 @@ def start_ai_grading_route() -> StudentAnswer:
     id=int(id)
     question:Question
     question=test.questions[id]
+    print("question.question_content=",question.question_content)
     # 使用ai_mock_stu_num迭代
     for stu_answer in question.stu_answer_list:
         # print(f"AI Grading Response for Student ID {stu_answer.stu_id}")
@@ -568,7 +569,7 @@ def start_ai_grading_route() -> StudentAnswer:
         ai_grading_json_str=GLM4_FUNCTION(question.ai_prompt, stu_answer.stu_answer)
         # print("ai_grading_json_str=", ai_grading_json_str)
         json_str,ai_grading_json=try_parse_json_object(ai_grading_json_str)        
-        print("ai_grading_json=", ai_grading_json)
+        # print("ai_grading_json=", ai_grading_json)
 
         ai_score=ai_grading_json['ai_score']
         ai_score_reason=ai_grading_json['ai_score_reason']
