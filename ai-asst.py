@@ -251,7 +251,7 @@ def update_question_content_standard_answer_route():
     id=int(id)
     # 创建Question类实例,只设置question_content和standard_answer，其他属性设为默认值
     
-
+    print("update:",id,question_content,standard_answer)
     question = Question(question_content=question_content, standard_answer=standard_answer)    
     # 如果key不存在test.questions的key中，则创建键值对
     if id not in test.questions.keys():
