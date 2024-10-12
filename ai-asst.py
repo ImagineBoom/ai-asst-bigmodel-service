@@ -118,7 +118,9 @@ class StudentAnswer:
     ai_status: bool = False
     # 答题时间,默认值为当前日期时间
     answer_time: str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
+    # 学生观点凝练
+    stu_view_clarify: str = ""
+    
 @dataclass
 class Question:
     # 老师姓名
@@ -288,12 +290,13 @@ def gen_score_key_points(id: int ,question_content: str, standard_answer: str):
 根据【考题内容】和【标准答案】，生成考题的得分点
 
 ##【字段定义】：
-试卷和题目请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
+请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
 ### JSON字段：
 {{
     "score_key_points": ["得分点内容"]
 }}
 """
+
     user_prompt_give_dimension=f"""
 ##【考题内容】
 {question_content}
@@ -306,6 +309,35 @@ def gen_score_key_points(id: int ,question_content: str, standard_answer: str):
     # json_data=json.loads(json_str)
     test.questions[id].score_key_points= json_dict['score_key_points']
 
+@app.route('/add_dimension', methods=['POST'])
+def add_dimension():
+    id = request.form['id']
+    id=int(id)
+    dimension_name = request.form['dimension_name']
+    first_level_index = request.form['first_level_index']
+    second_level_index = request.form['second_level_index']
+    core_field_recall = request.form['core_field_recall']
+
+    # 添加维度
+    test.questions[id].exam_dimension_list.append(
+        Dimension(
+            dimension_name=dimension_name,
+            first_level_index=first_level_index,
+            second_level_index=second_level_index,
+            core_field_recall=core_field_recall
+        )
+    )
+    
+    return jsonify({"success": True, "message": "Question added successfully."}), 200
+
+@app.route('/get_dimension', methods=['GET'])
+def get_dimension_route():
+    id = request.args.get('id')
+    id=int(id)
+    question_dict = dataclass_to_dict(test.questions[id])
+    return jsonify(question_dict), 200
+
+
 @app.route('/give_dimension', methods=['GET'])
 def give_dimension_route():
 
@@ -316,14 +348,14 @@ def give_dimension_route():
     __question_content=test.questions[id].question_content
     system_prompt_give_dimension=f"""
 ##【任务要求】
-根据我提供的【题目】和【参考答案】，给出对应的(维度,一级指标,二级指标,核心字段召回)JSON列表，列表长度不能大于6。
+根据【题目】和【参考答案】，给出对应的(维度,一级指标,二级指标,核心字段召回)JSON列表，列表长度不能大于6。
+
+##【字段定义】：
 1. 维度名称【dimension_name】： 维度是指评价或测试的某个方面或领域。它是评价内容的分类方式，用于确定评价的方向和重点。例如，在一份学生的综合评价中，可能包含“知识掌握”、“技能应用”和“情感态度”等维度。
 2. 一级指标【first_level_index】： 一级指标是维度的进一步细分，它描述了需要考虑的主要因素，不能给出具体实例。一级指标通常是评价体系中的主要评判点，例如在“知识掌握”维度下，一级指标可能是“基础知识掌握”、“专业知识掌握”等。
 3. 二级指标【second_level_index】： 二级指标是对一级指标的进一步细化，它描述了如何具体评价一级指标。二级指标通常是可量化的具体评价点，例如在“基础知识掌握”一级指标下，二级指标可能是“记忆准确度”、“理解深度”等。
 4. 核心字段召回【core_field_recall】： 不超过6个字。核心字段召回指的是在评价过程中需要特别关注和记录的关键信息或数据点。这些字段是评价结果的关键组成部分，它们直接关联到评价对象在该指标上的表现。例如，如果评价学生的“记忆准确度”，核心字段召回可能是学生在记忆测试中的正确率。
-
-##【字段定义】：
-试卷和题目请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
+5. 请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
 ### JSON字段：
 {{
 "exam_dimension_list":[
@@ -341,8 +373,11 @@ def give_dimension_route():
 1. 基于给出的内容，专业和严谨的回答问题。不允许添加任何编造成分。
 """
     user_prompt_give_dimension=f"""
-【题目】：{__question_content}
-【参考答案】：{__standard_answer}
+##【题目】：
+{__question_content}
+
+##【参考答案】：
+{__standard_answer}
 """
 
     json_str=GLM4_FUNCTION(system_prompt_give_dimension, user_prompt_give_dimension)
@@ -435,9 +470,10 @@ def get_ai_prompt_route():
     - 文本多样性：AI 生成的内容可能在用词和句式上重复性较高，缺乏多样性。可以通过分析文本的用词和句式结构，检查是否有重复模式。
     - 一致性检查：可以通过检查文档的元数据，如创建时间和作者信息等，判断内容是否与人类创作的文档一致。
 10. stu_characteristics: 学生答案主旨词。提取学生答案中的主旨词，不超过5个，用顿号【、】区隔。
+11. stu_view_clarify: 学生观点凝练。不超过100字，用顿号【、】区隔。
 
 ##【字段定义】：
-试卷和题目请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
+请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
 ### JSON字段：
 {{
     "ai_score": 90,
@@ -457,7 +493,8 @@ def get_ai_prompt_route():
     "hit_view_count": 5,
     "stu_answer_ai_suspicious": "10%",
     "stu_answer_ai_suspicious_reason":"【任务要求】9. stu_answer_ai_suspicious_reason",
-    "stu_characteristics":"【任务要求】10. stu_characteristics"
+    "stu_characteristics":"【任务要求】10. stu_characteristics",
+    "stu_view_clarify":"【任务要求】11. stu_view_clarify"
 }}
 
 ## 注意事项：
@@ -581,6 +618,7 @@ def start_ai_grading_route() -> StudentAnswer:
         stu_answer_ai_suspicious=ai_grading_json['stu_answer_ai_suspicious']
         stu_answer_ai_suspicious_reason=ai_grading_json['stu_answer_ai_suspicious_reason']
         stu_characteristics=ai_grading_json['stu_characteristics']
+        stu_view_clarify=ai_grading_json['stu_view_clarify']
         
         stu_answer.ai_score=float(ai_score)
         stu_answer.ai_score_reason=ai_score_reason
@@ -592,6 +630,7 @@ def start_ai_grading_route() -> StudentAnswer:
         stu_answer.stu_answer_ai_suspicious=extract_first_real_number(stu_answer_ai_suspicious)
         stu_answer.stu_answer_ai_suspicious_reason=stu_answer_ai_suspicious_reason
         stu_answer.stu_characteristics=stu_characteristics
+        stu_answer.stu_view_clarify=stu_view_clarify
         stu_answer.ai_status=True
         
         # 根据 ai_score 更新 stu_score_level ，其中 大于等于90分为A，80-89分为B，70-79分为C，60-69分为D，60分以下为E
@@ -793,7 +832,7 @@ def create_chart_route() -> StudentAnswer:
 2. main_idea_list_count ：主旨词出现次数列表
 
 ##【字段定义】：
-试卷和题目请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
+请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
 ### JSON字段：
 {{
 "main_idea_list":[
