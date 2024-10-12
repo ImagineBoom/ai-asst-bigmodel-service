@@ -10,8 +10,11 @@ from zhipuai import ZhipuAI
 from json_tool import try_parse_ast_to_json, try_parse_json_object
 import logging
 
+from flask_cors import CORS
+
 # 创建Flask应用
 app = Flask(__name__)
+CORS(app, resources=r'/*')
 client = ZhipuAI(api_key="d0ec437e4b38610fe6a811eff802da77.pcTnm7mFo2Ue30Lm") 
 
 # 定义转换函数
@@ -217,7 +220,6 @@ def GLM4_FUNCTION(system_prompt: str, user_prompt: str):
         print(f"Error in GLM4_FUNCTION: {e}")
         return ""
 
-app = Flask(__name__)
 # 自定义JSON序列化
 class CustomJSONEncoder(json.JSONEncoder):
     def encode(self, obj):
@@ -425,7 +427,7 @@ def get_ai_prompt_route():
 5. hit_view_list: 学生答案命中得分要点列表。学生答案的要点与符合【得分要点列表】的交集。元素的个数等于【hit_view_count】
 6. stu_answer_score_key_points_match_list: 学生答案命中得分要点的符合度列表。【hit_view_list】中每个要点的符合度，每个元素的类型为百分数，取值越大表示学生答案与得分要点的匹配程度越高。元素的个数等于【hit_view_count】
 7. hit_view_count: 学生答案命中得分要点的个数。【hit_view_list】中元素的个数。
-8. stu_answer_ai_suspicious: 学生答案疑似AI生成可疑度。表示学生答案疑似AI生成的概率，类型为百分数。疑似AI答案的原因在【stu_answer_ai_suspicious_reason】项中给出。
+8. stu_answer_ai_suspicious: 学生答案疑似AI生成可疑度。表示学生答案疑似AI生成的概率，根据【stu_answer_ai_suspicious_reason】给出概率。类型为百分数。
 9. stu_answer_ai_suspicious_reason: 学生答案疑似AI的原因。不超过200字。可以通过以下几个方面进行分析：
     - 语言风格分析：AI 生成的内容可能在语言风格上过于统一，缺乏个性和情感色彩。可以通过对比内容中的语言风格，判断是否与人类的自然表达方式一致。
     - 逻辑一致性：AI 在生成内容时，可能会在某些地方出现逻辑跳跃或不够连贯的表达。可以通过逻辑分析，检查文本中的论述是否连贯一致。
@@ -829,4 +831,4 @@ def create_chart_route() -> StudentAnswer:
     return jsonify({"success": True, "message": "start_ai_grading successfully."}), 200
 
 if __name__ == '__main__':
-    app.run(debug=True, host='10.2.8.9', port=8080)
+    app.run(debug=True, host='0.0.0.0', port=7999)
