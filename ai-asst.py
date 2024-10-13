@@ -666,6 +666,7 @@ def start_ai_grading_route_second_round(id:int):
 ##【输出字段定义】:
 请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔:
 ### JSON字段:
+{{
     "AIGC_Percentage_CompareBotResponseReference": 0.5,
     "AIGC_Percentage_CompareBotResponseReference_Reason": "【输入文本】是否为AI生成的原因",
     "AIGC_LanguageStyle": {{
