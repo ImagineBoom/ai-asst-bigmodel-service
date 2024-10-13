@@ -120,6 +120,8 @@ class StudentAnswer:
     answer_time: str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     # 学生观点凝练
     stu_view_clarify: str = ""
+    # 学生答案优化
+    stu_answer_optimization: str = ""
     
 @dataclass
 class Question:
@@ -205,7 +207,7 @@ def GLM4_FUNCTION(system_prompt: str, user_prompt: str):
             {"role": "user", "content": user_prompt},
         ]
         response = client.chat.completions.create(
-            model="glm-4-flash",
+            model="glm-4-plus",
             messages=chat_history,
             stream=True
         )
@@ -349,13 +351,13 @@ def give_dimension_route():
     system_prompt_give_dimension=f"""
 ##【任务要求】
 根据【题目】和【参考答案】，给出对应的(维度,一级指标,二级指标,核心字段召回)JSON列表，列表长度不能大于6。
-
-##【字段定义】：
 1. 维度名称【dimension_name】： 维度是指评价或测试的某个方面或领域。它是评价内容的分类方式，用于确定评价的方向和重点。例如，在一份学生的综合评价中，可能包含“知识掌握”、“技能应用”和“情感态度”等维度。
 2. 一级指标【first_level_index】： 一级指标是维度的进一步细分，它描述了需要考虑的主要因素，不能给出具体实例。一级指标通常是评价体系中的主要评判点，例如在“知识掌握”维度下，一级指标可能是“基础知识掌握”、“专业知识掌握”等。
 3. 二级指标【second_level_index】： 二级指标是对一级指标的进一步细化，它描述了如何具体评价一级指标。二级指标通常是可量化的具体评价点，例如在“基础知识掌握”一级指标下，二级指标可能是“记忆准确度”、“理解深度”等。
 4. 核心字段召回【core_field_recall】： 不超过6个字。核心字段召回指的是在评价过程中需要特别关注和记录的关键信息或数据点。这些字段是评价结果的关键组成部分，它们直接关联到评价对象在该指标上的表现。例如，如果评价学生的“记忆准确度”，核心字段召回可能是学生在记忆测试中的正确率。
-5. 请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
+
+##【字段定义】：
+请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
 ### JSON字段：
 {{
 "exam_dimension_list":[
@@ -402,6 +404,7 @@ def get_ai_prompt_route():
     __score_key_points=""
     __dimsnsions=""
     __core_field_recalls=""
+    __score_history=""
 
     id = request.args.get('id')
     # id转为int
@@ -437,8 +440,13 @@ def get_ai_prompt_route():
     system_prompt_give_dimension=f"""
 ## 角色：你是一个专业的课程老师 ，现在需要你批改试题，我将发给你学生答案，需要你按照以下【任务要求】执行。
 
+##【打分历史记录】
+{__score_history}
+
+
 ## 【评分规则】：
 1. 总分为100分。
+2. 学习【打分历史记录】，根据其中的 老师评论、老师打分 情况进行打分。
 2. 【学生答案】需要围绕【维度和指标】内容以及【参考答案】展开，必须包含的核心字段有：{__core_field_recalls}，越贴近得分越多，越远离扣分越多。
 3. 参考答案中的关键名字不能写错，写错需要扣分。
 
@@ -471,6 +479,7 @@ def get_ai_prompt_route():
     - 一致性检查：可以通过检查文档的元数据，如创建时间和作者信息等，判断内容是否与人类创作的文档一致。
 10. stu_characteristics: 学生答案主旨词。提取学生答案中的主旨词，不超过5个，用顿号【、】区隔。
 11. stu_view_clarify: 学生观点凝练。不超过100字，用顿号【、】区隔。
+12. stu_answer_optimization: 学生答案优化建议。不超过100字，用顿号【、】区隔。
 
 ##【字段定义】：
 请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔：
@@ -494,7 +503,8 @@ def get_ai_prompt_route():
     "stu_answer_ai_suspicious": "10%",
     "stu_answer_ai_suspicious_reason":"【任务要求】9. stu_answer_ai_suspicious_reason",
     "stu_characteristics":"【任务要求】10. stu_characteristics",
-    "stu_view_clarify":"【任务要求】11. stu_view_clarify"
+    "stu_view_clarify":"【任务要求】11. stu_view_clarify",
+    "stu_answer_optimization":"【任务要求】12. stu_answer_optimization",
 }}
 
 ## 注意事项：
@@ -579,7 +589,7 @@ def set_AI_autogenerate_answer_route() -> StudentAnswer:
 1. 答案格式像是AI回复的。
 2. 答案不带个性化。
 3. 答案用词和句式上重复性较高，缺乏多样性。
-4. 答案输出不超过100字。
+4. 答案输出不超过500字。
 """
     # 使用ai_mock_stu_num迭代
     for i in range(ai_mock_stu_num):    
@@ -591,6 +601,207 @@ def set_AI_autogenerate_answer_route() -> StudentAnswer:
         create_student_answer(id, ai_mock_answer, ai_mock_stu_id, ai_mock_stu_name)
     return jsonify({"success": True, "message": "set_AI_autogenerate_route added successfully."}), 200
 
+def start_ai_grading_route_second_round(id:int):
+    question:Question
+    question=test.questions[id]
+
+    system_prompt = f"""
+## 角色:
+你是一个能够识别一段话或者一句话是否为AI生成的助手。
+
+## 注意
+- 请仔细分析【输入文本】考虑其写作风格、内容的原创性、情感表达的深度、个人经验或观点的独特性等方面。基于这些维度，判断这些文本是否可能是由AI生成的。特别注意任何看似超出通常AI生成内容能力范畴的元素，如复杂的情感表达、详细的个人经验描述等
+- 请考虑AI和人类写作之间可能的细微差别。如果你在判断时感到不确定，请明确指出这种不确定性，并解释是哪些方面让你难以做出明确判断。
+
+## question:
+{question.question_content}
+
+## workflows1:
+- 回答 【question】 。使用这个回答对比【输入文本】，根据文本特征分析【输入文本】是否为AI生成。
+- 输出: 
+- AIGC_Percentage_CompareBotResponseReference: 取值范围为0-1，0表示确定不是AI生成，1表示确定是AI生成。 
+- AIGC_Percentage_CompareBotResponseReference_Reason:【输入文本】是否为AI生成的原因。
+
+## workflows2:
+1. 为 score_rules 中的每一项，使用【输入文本】计算一个疑似AI生成值，称为 Percentage，取值范围为0-1，0表示确定不是AI生成，1表示确定是AI生成。
+2. 根据语义将【输入文本】拆分最小的成句子或段落。每个句子或段落为一个部分称为 PartialText。
+3. 接下来 PartialText 作为分析的最小粒度。
+4. 对 score_rules 中的每一项，分别输入所有的 PartialText ，计算每个 PartialText 的AIGC值，称为 AIGC_Value，取值范围为0-1，0表示确定不是AI生成，1表示确定是AI生成。
+5. 下面是 score_rules 的每一项输出: 
+- Weight: 表示该评分规则在总评分中的权重。权重越高表明该评分规则对于鉴别AI文本的重要性越大。
+- High_WordCounter:  AIGC_Value 高的 PartialText 的字数之和。
+- Middle_WordCounter: AIGC_Value 中等的 PartialText 的字数之和。 
+- Low_WordCounter: AIGC_Value 低的 PartialText 的字数之和。 
+- Percentage: 取值范围为0-1，0表示确定不是AI生成，1表示确定是AI生成。 
+- Reason: 【输入文本】是否为AI生成的原因。
+- High_WordCounter_Mul_Percentage: 值为 High_WordCounter * Percentage。
+
+## score_rules:
+1. AIGC_LanguageStyle: 语言风格分析
+- 计算规则: 计算每个 PartialText 与人类文本的相似度。AI 生成的内容可能在语言风格上过于统一，缺乏个性和情感色彩。人类文本风格：人类文本的风格通常具有多样性，包括幽默、正式、口语化等。AI生成的内容可能过于统一，缺乏个性和情感色彩。可以根据 PartialText 的语言风格，判断是否与人类的自然表达方式一致。
+2. AIGC_GrammarStructure: 语法结构分析
+- 计算规则: 计算每个 PartialText 的语法错误率。AI 生成的内容可能在语法结构上存在错误或过于规范。可以通过语法分析工具，检查 PartialText 的语法结构是否正确。
+3. AIGC_FactAccuracy: 事实准确性分析
+- 计算规则: 计算每个PartialText的事实准确性。AI 生成的内容可能在事实准确性上存在偏差。可以通过事实核查工具，检查 PartialText 中的事实是否准确。
+4. AIGC_LogicalConsistency: 逻辑一致性分析
+- 计算规则: 计算PartialText之间的逻辑连贯性。AI 生成的内容可能在逻辑上存在跳跃或不连贯。可以通过逻辑分析工具，检查 PartialText 的逻辑是否连贯。
+5. AIGC_InformationDepth: 信息深度分析
+- 计算规则: 计算每个PartialText的信息深度。AI 生成的内容可能在深度上不如人类专家或学者创作的内容。可以对比专业领域的深度信息和细节，判断内容是否具有足够深度和专业性。
+6. AIGC_TextDiversity: 文本多样性分析
+- 计算规则: 计算每个PartialText的用词和句式多样性。AI 生成的内容可能在用词和句式上重复性较高，缺乏多样性。可以通过分析 PartialText 的用词和句式结构，检查是否有重复模式。
+7. AIGC_TextCoherence: 文本连贯性分析
+- 计算规则: 计算每个PartialText的段落和句子连贯性。AI 生成的内容可能在段落和句子之间缺乏连贯性。可以通过分析 PartialText 的段落和句子结构，检查是否有连贯性。
+8. AIGC_HumanReadability: 人类可读性分析
+- 计算规则: 计算每个PartialText的人类可读性。AI 生成的内容可能在人类可读性上不如人类专家或学者创作的内容。可以对比人类专家或学者创作的内容，判断内容是否具有足够的人类可读性。
+
+## workflow3:
+1. 将workflow1和workflow2连起来执行3遍。
+2. 根据前面的分析结果，总结可能是AI生成的内容的可能性和原因
+3. 计算规则: 根据前面执行3遍的评分结果计算均值，包括: AIGC_CompareBotResponseReference 、 AIGC_LanguageStyle 、 AIGC_GrammarStructure 、 AIGC_FactAccuracy 、 AIGC_LogicalConsistency 、 AIGC_InformationDept 、 AIGC_TextDiversity 、 AIGC_TextCoherence 、 AIGC_HumanReadability ，总结可能是AI生成的内容的原因，不超过200字。包括但不限于: 语言风格、语法结构、事实准确性、逻辑连贯性、信息深度、文本多样性、文本连贯性、人类可读性等。
+4. 输出：
+- ALL_WordCounter : 表示【输入文本】的总字数。 
+- AIGC_Percentage_Final : 取值范围为0-1，0表示确定不是AI生成，1表示确定是AI生成。 
+- AIGC_Reasons_Final : 表示可能是AI生成的内容的可能性和原因。
+
+##【输出字段定义】:
+请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔:
+### JSON字段:
+    "AIGC_Percentage_CompareBotResponseReference": 0.5,
+    "AIGC_Percentage_CompareBotResponseReference_Reason": "【输入文本】是否为AI生成的原因",
+    "AIGC_LanguageStyle": {{
+        "weight": 1,
+        "Percentage": 1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500,
+    }},
+    "AIGC_GrammarStructure": {{
+        "weight": 0.1,
+        "Percentage":1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500,
+    }},
+    "AIGC_FactAccuracy": {{
+        "weight": 2,
+        "Percentage":1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500,
+    }},
+    "AIGC_LogicalConsistency": {{
+        "weight": 1,
+        "Percentage":1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500,
+    }},
+    "AIGC_InformationDepth": {{
+        "weight": 1,
+        "Percentage":1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500,
+    }},
+    "AIGC_TextDiversity": {{
+        "weight": 1,
+        "Percentage":1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500,
+    }},
+    "AIGC_TextCoherence": {{
+        "weight": 0.1,
+        "Percentage":1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500
+    }},
+    "AIGC_HumanReadability": {{
+        "weight": 2,
+        "Percentage":1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500,
+    }},
+    "ALL_WordCounter": 0,
+    "AIGC_Percentage_Final": 1,
+    "AIGC_Reasons_Final": "总结文本是通过AI生成的原因"
+}}
+"""
+
+    for stu_answer in question.stu_answer_list:
+        user_prompt = f"""
+## 【输入文本】：
+{stu_answer.stu_answer}
+"""
+        ai_grading_json_str=GLM4_FUNCTION(system_prompt, user_prompt)
+        json_str,json_dict=try_parse_json_object(ai_grading_json_str)        
+
+        json_dict['AIGC_LanguageStyle']['weight']=1
+        json_dict['AIGC_GrammarStructure']['weight']=1
+        json_dict['AIGC_FactAccuracy']['weight']=1
+        json_dict['AIGC_LogicalConsistency']['weight']=1
+        json_dict['AIGC_InformationDepth']['weight']=1
+        json_dict['AIGC_TextDiversity']['weight']=1
+        json_dict['AIGC_TextCoherence']['weight']=1
+        json_dict['AIGC_HumanReadability']['weight']=1
+        ALL_WEIGHT= \
+            json_dict['AIGC_LanguageStyle']['weight']+ \
+            json_dict['AIGC_GrammarStructure']['weight']+\
+            json_dict['AIGC_FactAccuracy']['weight']+ \
+            json_dict['AIGC_LogicalConsistency']['weight']+\
+            json_dict['AIGC_InformationDepth']['weight']+\
+            json_dict['AIGC_TextDiversity']['weight']+\
+            json_dict['AIGC_TextCoherence']['weight']+\
+            json_dict['AIGC_HumanReadability']['weight']
+
+        ALL_AL_WD= \
+            json_dict['AIGC_LanguageStyle']['weight'] / ALL_WEIGHT * json_dict['AIGC_LanguageStyle']['High_WordCounter']+ \
+            json_dict['AIGC_GrammarStructure']['weight'] / ALL_WEIGHT *json_dict['AIGC_GrammarStructure']['High_WordCounter']+\
+            json_dict['AIGC_FactAccuracy']['weight'] / ALL_WEIGHT *json_dict['AIGC_FactAccuracy']['High_WordCounter']+ \
+            json_dict['AIGC_LogicalConsistency']['weight'] / ALL_WEIGHT *json_dict['AIGC_LogicalConsistency']['High_WordCounter']+\
+            json_dict['AIGC_InformationDepth']['weight'] / ALL_WEIGHT *json_dict['AIGC_InformationDepth']['High_WordCounter']+\
+            json_dict['AIGC_TextDiversity']['weight'] / ALL_WEIGHT *json_dict['AIGC_TextDiversity']['High_WordCounter']+\
+            json_dict['AIGC_TextCoherence']['weight'] / ALL_WEIGHT *json_dict['AIGC_TextCoherence']['High_WordCounter']+\
+            json_dict['AIGC_HumanReadability']['weight'] / ALL_WEIGHT *json_dict['AIGC_HumanReadability']['High_WordCounter']
+        ALL_WD=json_dict['ALL_WordCounter']
+        final_P:float=ALL_AL_WD/ALL_WD
+        # 对final_P进行四舍五入，保留两位小数
+        final_P = round(final_P, 2)
+        # print("final P=",ALL_AL_WD/ALL_WD)
+        stu_answer.stu_answer_ai_suspicious=final_P
+        stu_answer.stu_answer_ai_suspicious_reason=json_dict['AIGC_Reasons_Final']
+        # "完美试卷"、"高分试卷"、"疑似AI"
+        stu_answer.ai_score_tags=[]
+        if(final_P>0.7):
+            stu_answer.ai_score_tags.append("疑似AI")
+            print("疑似AI-",stu_answer.stu_name)
+            
+        if(final_P<=0.6 and stu_answer.ai_score>=90):
+            stu_answer.ai_score_tags.append("完美试卷")
+            print("完美试卷-",stu_answer.stu_name)
+
+        elif(stu_answer.ai_score>=90):
+            stu_answer.ai_score_tags.append("高分试卷")
+            print("高分试卷-",stu_answer.stu_name)
+
 @app.route('/start_ai_grading', methods=['POST'])
 def start_ai_grading_route() -> StudentAnswer:
     id = request.form['id']
@@ -598,6 +809,148 @@ def start_ai_grading_route() -> StudentAnswer:
     question:Question
     question=test.questions[id]
     print("question.question_content=",question.question_content)
+    system_prompt = f"""
+## 角色:
+你是一个能够识别一段话或者一句话是否为AI生成的助手。
+
+## 注意
+- 请仔细分析【输入文本】考虑其写作风格、内容的原创性、情感表达的深度、个人经验或观点的独特性等方面。基于这些维度，判断这些文本是否可能是由AI生成的。特别注意任何看似超出通常AI生成内容能力范畴的元素，如复杂的情感表达、详细的个人经验描述等
+- 请考虑AI和人类写作之间可能的细微差别。如果你在判断时感到不确定，请明确指出这种不确定性，并解释是哪些方面让你难以做出明确判断。
+
+## question:
+{question.question_content}
+
+## workflows1:
+- 回答 【question】 。使用这个回答对比【输入文本】，根据文本特征分析【输入文本】是否为AI生成。
+- 输出: 
+- AIGC_Percentage_CompareBotResponseReference: 取值范围为0-1，0表示确定不是AI生成，1表示确定是AI生成。 
+- AIGC_Percentage_CompareBotResponseReference_Reason:【输入文本】是否为AI生成的原因。
+
+## workflows2:
+1. 为 score_rules 中的每一项，使用【输入文本】计算一个疑似AI生成值，称为 Percentage，取值范围为0-1，0表示确定不是AI生成，1表示确定是AI生成。
+2. 根据语义将【输入文本】拆分最小的成句子或段落。每个句子或段落为一个部分称为 PartialText。
+3. 接下来 PartialText 作为分析的最小粒度。
+4. 对 score_rules 中的每一项，分别输入所有的 PartialText ，计算每个 PartialText 的AIGC值，称为 AIGC_Value，取值范围为0-1，0表示确定不是AI生成，1表示确定是AI生成。
+5. 下面是 score_rules 的每一项输出: 
+- Weight: 表示该评分规则在总评分中的权重。权重越高表明该评分规则对于鉴别AI文本的重要性越大。
+- High_WordCounter:  AIGC_Value 高的 PartialText 的字数之和。
+- Middle_WordCounter: AIGC_Value 中等的 PartialText 的字数之和。 
+- Low_WordCounter: AIGC_Value 低的 PartialText 的字数之和。 
+- Percentage: 取值范围为0-1，0表示确定不是AI生成，1表示确定是AI生成。 
+- Reason: 【输入文本】是否为AI生成的原因。
+- High_WordCounter_Mul_Percentage: 值为 High_WordCounter * Percentage。
+
+## score_rules:
+1. AIGC_LanguageStyle: 语言风格分析
+- 计算规则: 计算每个 PartialText 与人类文本的相似度。AI 生成的内容可能在语言风格上过于统一，缺乏个性和情感色彩。人类文本风格：人类文本的风格通常具有多样性，包括幽默、正式、口语化等。AI生成的内容可能过于统一，缺乏个性和情感色彩。可以根据 PartialText 的语言风格，判断是否与人类的自然表达方式一致。
+2. AIGC_GrammarStructure: 语法结构分析
+- 计算规则: 计算每个 PartialText 的语法错误率。AI 生成的内容可能在语法结构上存在错误或过于规范。可以通过语法分析工具，检查 PartialText 的语法结构是否正确。
+3. AIGC_FactAccuracy: 事实准确性分析
+- 计算规则: 计算每个PartialText的事实准确性。AI 生成的内容可能在事实准确性上存在偏差。可以通过事实核查工具，检查 PartialText 中的事实是否准确。
+4. AIGC_LogicalConsistency: 逻辑一致性分析
+- 计算规则: 计算PartialText之间的逻辑连贯性。AI 生成的内容可能在逻辑上存在跳跃或不连贯。可以通过逻辑分析工具，检查 PartialText 的逻辑是否连贯。
+5. AIGC_InformationDepth: 信息深度分析
+- 计算规则: 计算每个PartialText的信息深度。AI 生成的内容可能在深度上不如人类专家或学者创作的内容。可以对比专业领域的深度信息和细节，判断内容是否具有足够深度和专业性。
+6. AIGC_TextDiversity: 文本多样性分析
+- 计算规则: 计算每个PartialText的用词和句式多样性。AI 生成的内容可能在用词和句式上重复性较高，缺乏多样性。可以通过分析 PartialText 的用词和句式结构，检查是否有重复模式。
+7. AIGC_TextCoherence: 文本连贯性分析
+- 计算规则: 计算每个PartialText的段落和句子连贯性。AI 生成的内容可能在段落和句子之间缺乏连贯性。可以通过分析 PartialText 的段落和句子结构，检查是否有连贯性。
+8. AIGC_HumanReadability: 人类可读性分析
+- 计算规则: 计算每个PartialText的人类可读性。AI 生成的内容可能在人类可读性上不如人类专家或学者创作的内容。可以对比人类专家或学者创作的内容，判断内容是否具有足够的人类可读性。
+
+## workflow3:
+1. 将workflow1和workflow2连起来执行3遍。
+2. 根据前面的分析结果，总结可能是AI生成的内容的可能性和原因
+3. 计算规则: 根据前面执行3遍的评分结果计算均值，包括: AIGC_CompareBotResponseReference 、 AIGC_LanguageStyle 、 AIGC_GrammarStructure 、 AIGC_FactAccuracy 、 AIGC_LogicalConsistency 、 AIGC_InformationDept 、 AIGC_TextDiversity 、 AIGC_TextCoherence 、 AIGC_HumanReadability ，总结可能是AI生成的内容的原因，不超过200字。包括但不限于: 语言风格、语法结构、事实准确性、逻辑连贯性、信息深度、文本多样性、文本连贯性、人类可读性等。
+4. 输出：
+- ALL_WordCounter : 表示【输入文本】的总字数。 
+- AIGC_Percentage_Final : 取值范围为0-1，0表示确定不是AI生成，1表示确定是AI生成。 
+- AIGC_Reasons_Final : 表示可能是AI生成的内容的可能性和原因。
+
+##【输出字段定义】:
+请严格按照如下格式仅输出JSON，不要输出python代码，不要返回多余信息，JSON中有多个字段用顿号【、】区隔:
+### JSON字段:
+{{
+    "AIGC_Percentage_CompareBotResponseReference": 0.5,
+    "AIGC_Percentage_CompareBotResponseReference_Reason": "【输入文本】是否为AI生成的原因",
+    "AIGC_LanguageStyle": {{
+        "weight": 1,
+        "Percentage": 1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500,
+    }},
+    "AIGC_GrammarStructure": {{
+        "weight": 0.1,
+        "Percentage":1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500,
+    }},
+    "AIGC_FactAccuracy": {{
+        "weight": 2,
+        "Percentage":1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500,
+    }},
+    "AIGC_LogicalConsistency": {{
+        "weight": 1,
+        "Percentage":1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500,
+    }},
+    "AIGC_InformationDepth": {{
+        "weight": 1,
+        "Percentage":1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500,
+    }},
+    "AIGC_TextDiversity": {{
+        "weight": 1,
+        "Percentage":1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500,
+    }},
+    "AIGC_TextCoherence": {{
+        "weight": 0.1,
+        "Percentage":1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500
+    }},
+    "AIGC_HumanReadability": {{
+        "weight": 2,
+        "Percentage":1,
+        "Reason": "【输入文本】是否为AI生成的原因",
+        "High_WordCounter": 500,
+        "Middle_WordCounter": 300,
+        "Low_WordCounter": 100,
+        "High_WordCounter_Mul_Percentage": 500,
+    }},
+    "ALL_WordCounter": 0,
+    "AIGC_Percentage_Final": 1,
+    "AIGC_Reasons_Final": "总结文本是通过AI生成的原因"
+}}
+"""
+
     # 使用ai_mock_stu_num迭代
     for stu_answer in question.stu_answer_list:
         # print(f"AI Grading Response for Student ID {stu_answer.stu_id}")
@@ -622,16 +975,17 @@ def start_ai_grading_route() -> StudentAnswer:
         
         stu_answer.ai_score=float(ai_score)
         stu_answer.ai_score_reason=ai_score_reason
-        stu_answer.ai_score_tags=ai_score_tags
+        # stu_answer.ai_score_tags=ai_score_tags
         question.ai_answer=ai_answer
         stu_answer.hit_view_count=hit_view_count
         stu_answer.hit_view_list=hit_view_list
         stu_answer.stu_answer_score_key_points_match_list=[extract_first_real_number(x) for x in stu_answer_score_key_points_match_list]
-        stu_answer.stu_answer_ai_suspicious=extract_first_real_number(stu_answer_ai_suspicious)
-        stu_answer.stu_answer_ai_suspicious_reason=stu_answer_ai_suspicious_reason
+        # stu_answer.stu_answer_ai_suspicious=extract_first_real_number(stu_answer_ai_suspicious)
+        # stu_answer.stu_answer_ai_suspicious_reason=stu_answer_ai_suspicious_reason
         stu_answer.stu_characteristics=stu_characteristics
         stu_answer.stu_view_clarify=stu_view_clarify
         stu_answer.ai_status=True
+        stu_answer.stu_answer_optimization=ai_grading_json['stu_answer_optimization']
         
         # 根据 ai_score 更新 stu_score_level ，其中 大于等于90分为A，80-89分为B，70-79分为C，60-69分为D，60分以下为E
         if stu_answer.ai_score >= 90:
@@ -644,6 +998,61 @@ def start_ai_grading_route() -> StudentAnswer:
             stu_answer.stu_score_level = 'D'
         else:
             stu_answer.stu_score_level = 'E'
+
+        user_prompt = f"""
+## 【输入文本】：
+{stu_answer.stu_answer}
+"""
+        ai_grading_json_str=GLM4_FUNCTION(system_prompt, user_prompt)
+        json_str,json_dict=try_parse_json_object(ai_grading_json_str)        
+
+        json_dict['AIGC_LanguageStyle']['weight']=1
+        json_dict['AIGC_GrammarStructure']['weight']=1
+        json_dict['AIGC_FactAccuracy']['weight']=1
+        json_dict['AIGC_LogicalConsistency']['weight']=1
+        json_dict['AIGC_InformationDepth']['weight']=1
+        json_dict['AIGC_TextDiversity']['weight']=1
+        json_dict['AIGC_TextCoherence']['weight']=1
+        json_dict['AIGC_HumanReadability']['weight']=1
+
+        ALL_WEIGHT= \
+            json_dict['AIGC_LanguageStyle']['weight']+ \
+            json_dict['AIGC_GrammarStructure']['weight']+\
+            json_dict['AIGC_FactAccuracy']['weight']+ \
+            json_dict['AIGC_LogicalConsistency']['weight']+\
+            json_dict['AIGC_InformationDepth']['weight']+\
+            json_dict['AIGC_TextDiversity']['weight']+\
+            json_dict['AIGC_TextCoherence']['weight']+\
+            json_dict['AIGC_HumanReadability']['weight']
+
+        ALL_AL_WD= \
+            json_dict['AIGC_LanguageStyle']['weight'] / ALL_WEIGHT * json_dict['AIGC_LanguageStyle']['High_WordCounter']+ \
+            json_dict['AIGC_GrammarStructure']['weight'] / ALL_WEIGHT *json_dict['AIGC_GrammarStructure']['High_WordCounter']+\
+            json_dict['AIGC_FactAccuracy']['weight'] / ALL_WEIGHT *json_dict['AIGC_FactAccuracy']['High_WordCounter']+ \
+            json_dict['AIGC_LogicalConsistency']['weight'] / ALL_WEIGHT *json_dict['AIGC_LogicalConsistency']['High_WordCounter']+\
+            json_dict['AIGC_InformationDepth']['weight'] / ALL_WEIGHT *json_dict['AIGC_InformationDepth']['High_WordCounter']+\
+            json_dict['AIGC_TextDiversity']['weight'] / ALL_WEIGHT *json_dict['AIGC_TextDiversity']['High_WordCounter']+\
+            json_dict['AIGC_TextCoherence']['weight'] / ALL_WEIGHT *json_dict['AIGC_TextCoherence']['High_WordCounter']+\
+            json_dict['AIGC_HumanReadability']['weight'] / ALL_WEIGHT *json_dict['AIGC_HumanReadability']['High_WordCounter']
+        
+        ALL_WD=json_dict['ALL_WordCounter']
+        final_P:float=ALL_AL_WD/ALL_WD
+        # 对final_P进行四舍五入，保留两位小数
+        final_P = round(final_P, 2)
+        # print("final P=",ALL_AL_WD/ALL_WD)
+        stu_answer.stu_answer_ai_suspicious=final_P
+        stu_answer.stu_answer_ai_suspicious_reason=json_dict['AIGC_Reasons_Final']
+        # "完美试卷"、"高分试卷"、"疑似AI"
+        stu_answer.ai_score_tags=[]
+        if(final_P>0.7):
+            stu_answer.ai_score_tags.append("疑似AI")
+            print("疑似AI-",stu_answer.stu_name)
+        if(final_P<=0.6 and stu_answer.ai_score>=90):
+            stu_answer.ai_score_tags.append("完美试卷")
+            print("完美试卷-",stu_answer.stu_name)
+        elif(stu_answer.ai_score>=90):
+            stu_answer.ai_score_tags.append("高分试卷")
+            print("高分试卷-",stu_answer.stu_name)
     return jsonify({"success": True, "message": "start_ai_grading successfully."}), 200
 
 @app.route('/get_one_stu_answer_detail', methods=['GET'])
