@@ -1,0 +1,1 @@
+nohup /home/ubuntu/workspace/ai-asst-bigmodel-service/.venv/bin/python /home/ubuntu/workspace/ai-asst-bigmodel-service/ai-asst.py > all.log 2>&1 &
